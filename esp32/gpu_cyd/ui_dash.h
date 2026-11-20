@@ -239,33 +239,66 @@ private:
       return;
     }
     bool tokLive = st.tok >= 0 && st.tokAge >= 0 && st.tokAge < 900;   // <15 min — jak w trayu
-    char left[48], right[24] = "";
-    uint16_t dot, bg = ui::PANEL, txt = ui::TEXT;
+    char right[24] = "";
+    uint16_t dot, bg = ui::PANEL;
     if (st.busy) {
       // pulsowanie pomarańczowy ↔ czerwony (~1.4 Hz, jak kropka w trayu)
       float phase = (sinf(now * 0.001f * 2 * PI * 1.4f) + 1) / 2;
       dot = uiMix(ui::ORANGE, ui::RED, phase);
       bg = uiMix(ui::PANEL, dot, 0.22f);
-      snprintf(left, sizeof(left), "%s  %lus", st.model[0] ? truncTo(st.model, 20) : "Ollama",
-               (unsigned long)st.gen);
       if (tokLive) snprintf(right, sizeof(right), "%.1f tok/s", st.tok);
     } else {
       dot = tokLive ? ui::GREEN : ui::DIM;
-      txt = ui::DIM;
-      snprintf(left, sizeof(left), "Ollama: bezczynny");
       if (tokLive) snprintf(right, sizeof(right), "ost. %.1f tok/s", st.tok);
     }
     card(g, x, y, w, h, bg);
     g.fillCircle(x + 11, cy, 4, dot);
-    g.setTextColor(txt);
-    g.setTextDatum(lgfx::middle_left);
-    g.drawString(left, x + 22, cy);
+
+    // Najpierw prawa strona (tok/s) — jej szerokość wyznacza miejsce na lewą.
+    int leftX = x + 22, rightEdge = x + w - 8;
     if (right[0]) {
       g.setTextColor(st.busy ? ui::TEXT : ui::DIM);
       g.setTextDatum(lgfx::middle_right);
-      g.drawString(right, x + w - 8, cy);
+      g.drawString(right, rightEdge, cy);
+      rightEdge -= g.textWidth(right) + 12;            // odstęp między lewą a prawą
+    }
+    g.setTextDatum(lgfx::middle_left);
+    if (st.busy) {
+      // model (przycinany do szerokości w px) + czas generacji (zawsze widoczny)
+      char t[12];
+      fmtDur(st.gen, t, sizeof(t));
+      int tw = g.textWidth(t);
+      const char* m = fitText(g, st.model[0] ? st.model : "Ollama", rightEdge - leftX - tw - 8);
+      g.setTextColor(ui::TEXT);
+      g.drawString(m, leftX, cy);
+      g.setTextColor(ui::DIM);
+      g.drawString(t, leftX + g.textWidth(m) + 8, cy);
+    } else {
+      g.setTextColor(ui::DIM);
+      g.drawString(fitText(g, "Ollama: bezczynny", rightEdge - leftX), leftX, cy);
     }
     g.setTextDatum(lgfx::top_left);
+  }
+
+  // Przycina tekst (z „..") tak, by w bieżącym foncie miał ≤ maxW px.
+  static const char* fitText(lgfx::LGFXBase& g, const char* s, int maxW) {
+    static char b[40];
+    strlcpy(b, s, sizeof(b));
+    if (g.textWidth(b) <= maxW) return b;
+    for (int n = strlen(b) - 1; n > 0; n--) {
+      snprintf(b, sizeof(b), "%.*s..", n, s);
+      if (g.textWidth(b) <= maxW) return b;
+    }
+    b[0] = 0;
+    return b;
+  }
+
+  // 42s / 3:07 / 1:02:05
+  static void fmtDur(uint32_t s, char* b, size_t n) {
+    if (s < 60) snprintf(b, n, "%lus", (unsigned long)s);
+    else if (s < 3600) snprintf(b, n, "%lu:%02lu", (unsigned long)(s / 60), (unsigned long)(s % 60));
+    else snprintf(b, n, "%lu:%02lu:%02lu", (unsigned long)(s / 3600), (unsigned long)(s / 60 % 60),
+                  (unsigned long)(s % 60));
   }
 
   // ── kafelek: etykieta | wartość (+ szara „/ suma") , pod spodem cienki pasek
