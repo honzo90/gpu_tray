@@ -202,3 +202,9 @@ esp32/
     ui_dash.h              # dashboard (sprite 8bpp, bez migotania)
     ui_wifi.h              # kalibracja dotyku, lista sieci, klawiatura
 ```
+
+## Licencja
+
+[MIT](LICENSE) © 2026 Rafael Pawelek.
+Firmware korzysta z bibliotek [LovyanGFX](https://github.com/lovyan03/LovyanGFX) (licencja FreeBSD)
+i [ArduinoJson](https://github.com/bblanchon/ArduinoJson) (MIT) — nie są dołączone do repo, instaluje się je osobno.
