@@ -160,8 +160,29 @@ uruchomiony zamiast GPU Tray.
 
 W godzinach **22:00–7:00** (wg zegara Maca) podświetlenie jest wyłączone. Dotknięcie budzi ekran
 na 30 s z wybraną jasnością — pierwsze dotknięcie tylko budzi (nie klika przycisków), kolejne
-przedłużają. Bez danych z Maca tryb nocny jest nieaktywny. Godziny zmienisz stałymi
-`NIGHT_FROM` / `NIGHT_TO` w `gpu_cyd.ino` (wymaga ponownego wgrania).
+przedłużają. Bez danych z Maca tryb nocny jest nieaktywny. Godziny, czas wybudzenia i samo
+włączenie trybu zmienisz w panelu WWW (poniżej).
+
+### Panel WWW z ustawieniami
+
+Po połączeniu z Wi-Fi CYD wystawia stronę ustawień pod **http://gpu-cyd.local** (mDNS) lub
+`http://<IP CYD>` (IP widać na ekranie po połączeniu). Na stronie:
+
+- **stan**: Mac (host, IP, świeżość danych), czas z Maca, Wi-Fi + RSSI, tryb nocny, uptime,
+- **ekran**: jasność (suwak 1–5) i obrót o 180° — zmiany od razu na ekranie,
+- **tryb nocny**: włącz/wyłącz, godziny od–do, czas wybudzenia dotykiem (5–600 s),
+- **Wi-Fi**: skanowanie, wybór sieci, hasło (puste przy tej samej sieci = bez zmiany) → zapis i restart,
+- **firmware**: wersja i aktualizacja przez przeglądarkę (OTA) plikiem `gpu_cyd-<v>-update.bin`
+  z [Releases](https://github.com/honzo90/gpu_tray/releases) — ustawienia zostają, kabel niepotrzebny,
+- **urządzenie**: restart, ponowna kalibracja dotyku.
+
+Panel nie ma logowania — działa wyłącznie w sieci lokalnej, tak jak komunikacja z Makiem.
+API (JSON) do skryptów: `GET /api/status`, `GET|POST /api/settings`, `GET /api/scan`,
+`POST /api/wifi`, `/api/restart`, `/api/calibrate`, `/api/update` (multipart), np.:
+
+```bash
+curl -s http://gpu-cyd.local/api/settings -H 'Content-Type: application/json' -d '{"bri":2,"night":{"from":"23:00","to":"06:30"}}'
+```
 
 ### Ustawienia w pamięci płytki (NVS, przestrzeń `gpucyd`)
 
@@ -171,6 +192,7 @@ przedłużają. Bez danych z Maca tryb nocny jest nieaktywny. Godziny zmienisz s
 | `sx1`, `sx2`, `sy1`, `sy2`, `xfy`, `yfx`, `calv` | kalibracja dotyku |
 | `rot180` | obrót o 180° |
 | `bri` | poziom jasności (indeks 0–4) |
+| `non`, `nfr`, `nto`, `nwk` | tryb nocny: włączony, od / do (minuty od północy), wybudzenie (s) |
 
 Reset wszystkich ustawień: `./build_esp32.sh erase`, potem ponowne wgranie.
 
@@ -224,6 +246,7 @@ esp32/
     gfx.h                  # konfiguracja LovyanGFX dla CYD, paleta, helpery
     ui_dash.h              # dashboard (sprite 8bpp, bez migotania)
     ui_wifi.h              # kalibracja dotyku, lista sieci, klawiatura
+    web.h                  # panel WWW z ustawieniami + API JSON + OTA
 ```
 
 ## Licencja

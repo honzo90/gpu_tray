@@ -6,13 +6,16 @@
 //
 // Pierwsze uruchomienie: kalibracja dotyku → wybór sieci Wi-Fi → hasło z klawiatury
 // ekranowej → zapis do NVS. Później łączy się automatycznie. ⚙ w rogu dashboardu
-// otwiera konfigurację ponownie.
+// otwiera konfigurację ponownie. Panel WWW z ustawieniami: http://gpu-cyd.local (web.h).
 #include <WiFi.h>
 #include <WiFiUdp.h>
 #include <Preferences.h>
 #include "gfx.h"
 #include "ui_dash.h"
 #include "ui_wifi.h"
+
+#define FW_VERSION   "1.1.0"
+#define WEB_HOSTNAME "gpu-cyd"
 
 LGFX lcd;
 Preferences prefs;
@@ -56,14 +59,25 @@ void applyBrightness(uint8_t idx, bool save) {
   Serial.printf("[ekran] jasnosc %d/%d (%d)\n", briIdx + 1, BRI_COUNT, BRI_LEVELS[briIdx]);
 }
 
-// ---- Tryb nocny: w godzinach NIGHT_FROM..NIGHT_TO podświetlenie wyłączone (0).
+// ---- Tryb nocny: w godzinach nightFrom..nightTo podświetlenie wyłączone (0).
 // Czas z zegara Maca (pole "t" w pakiecie), między pakietami dociągany z millis().
-// Dotknięcie budzi ekran na NIGHT_WAKE_MS (pierwsze dotknięcie tylko budzi).
-const int NIGHT_FROM = 22 * 60;              // minuty od północy: 22:00
-const int NIGHT_TO   = 7 * 60;               // 7:00
-const uint32_t NIGHT_WAKE_MS = 30000;
+// Dotknięcie budzi ekran na nightWakeS sekund (pierwsze dotknięcie tylko budzi).
+// Ustawienia z panelu WWW, w NVS: non (wł.), nfr/nto (minuty od północy), nwk (s).
+bool     nightOn    = true;
+int      nightFrom  = 22 * 60;                // 22:00
+int      nightTo    = 7 * 60;                 // 7:00
+uint16_t nightWakeS = 30;
 uint32_t wakeUntil = 0;
 bool nightLogged = false;
+
+void saveNight() {
+  prefs.putBool("non", nightOn);
+  prefs.putUShort("nfr", nightFrom);
+  prefs.putUShort("nto", nightTo);
+  prefs.putUShort("nwk", nightWakeS);
+  Serial.printf("[noc] %s %02d:%02d-%02d:%02d, wybudzenie %ds\n", nightOn ? "wl" : "wyl",
+                nightFrom / 60, nightFrom % 60, nightTo / 60, nightTo % 60, nightWakeS);
+}
 
 // Minuta doby wg zegara Maca; -1 gdy jeszcze nie znamy czasu.
 int macMinuteOfDay(uint32_t now) {
@@ -75,10 +89,11 @@ int macMinuteOfDay(uint32_t now) {
 }
 
 bool isNight(uint32_t now) {
+  if (!nightOn || nightFrom == nightTo) return false;
   int m = macMinuteOfDay(now);
   if (m < 0) return false;                   // bez czasu — normalna jasność
-  return NIGHT_FROM > NIGHT_TO ? (m >= NIGHT_FROM || m < NIGHT_TO)   // okno przez północ
-                               : (m >= NIGHT_FROM && m < NIGHT_TO);
+  return nightFrom > nightTo ? (m >= nightFrom || m < nightTo)   // okno przez północ
+                             : (m >= nightFrom && m < nightTo);
 }
 
 bool nightAwake(uint32_t now) { return (int32_t)(wakeUntil - now) > 0; }
@@ -90,6 +105,8 @@ void applyFlip(bool flip, bool save) {
   if (save) prefs.putBool("rot180", flip);
   Serial.printf("[ekran] obrot 180 = %d\n", (int)flip);
 }
+
+#include "web.h"   // panel WWW — używa globali i funkcji powyżej
 
 void setup() {
   Serial.begin(115200);
@@ -109,6 +126,10 @@ void setup() {
   cfgSSID = prefs.getString("ssid", "");
   cfgPass = prefs.getString("pass", "");
   applyFlip(prefs.getBool("rot180", false), false);
+  nightOn    = prefs.getBool("non", true);
+  nightFrom  = prefs.getUShort("nfr", 22 * 60) % 1440;
+  nightTo    = prefs.getUShort("nto", 7 * 60) % 1440;
+  nightWakeS = constrain(prefs.getUShort("nwk", 30), 5, 600);
   lcd.fillScreen(ui::BG);
 
   dash.begin(lcd);
@@ -121,7 +142,11 @@ void setup() {
   stage = !tcal.valid ? Stage::Calibrate
        : cfgSSID.isEmpty() ? Stage::Setup
        : Stage::Connect;
-  Serial.printf("[boot] stage=%d kalibracja=%d ssid='%s'\n", (int)stage, (int)tcal.valid, cfgSSID.c_str());
+  WiFi.setHostname(WEB_HOSTNAME);
+  // IPv6 (link-local) → mDNS odpowiada też na AAAA; bez tego macOS czeka ~5 s na
+  // timeout zapytania AAAA przy każdym otwarciu http://gpu-cyd.local
+  WiFi.enableIPv6();
+  Serial.printf("[boot] fw=%s stage=%d kalibracja=%d ssid='%s'\n", FW_VERSION, (int)stage, (int)tcal.valid, cfgSSID.c_str());
 }
 
 // Łączy z zapisanymi danymi; false = porażka (złe hasło / sieć zniknęła).
@@ -139,7 +164,13 @@ bool connectFlow() {
     Serial.printf("[wifi] OK, IP=%s\n", WiFi.localIP().toString().c_str());
     udp.begin(PORT_ESP);
     macKnown = false;             // po restarcie sieci MAC mógł zmienić IP
-    delay(900);                   // pokazujemy IP przez chwilę
+    webBegin();
+    lcd.setFont(&fonts::Font2);
+    lcd.setTextColor(ui::DIM);
+    lcd.setTextDatum(lgfx::middle_center);
+    lcd.drawString("Ustawienia: http://" WEB_HOSTNAME ".local", 160, 204);
+    lcd.setTextDatum(lgfx::top_left);
+    delay(1500);                  // pokazujemy IP i adres panelu przez chwilę
     return true;
   }
   WiFi.disconnect();
@@ -148,6 +179,7 @@ bool connectFlow() {
 }
 
 void dashboardLoop() {
+  webLoop();
   uint32_t now = millis();
 
   // Wi-Fi spadło? Najpierw cicha próba, potem pełny ekran łączenia.
@@ -201,7 +233,7 @@ void dashboardLoop() {
   if (touchXY(lcd, tcal, &x, &y)) {
     if (night) {
       bool wasAwake = nightAwake(now);
-      wakeUntil = now + NIGHT_WAKE_MS;      // każde dotknięcie przedłuża
+      wakeUntil = now + nightWakeS * 1000UL;      // każde dotknięcie przedłuża
       if (!wasAwake) {                       // wygaszony ekran: dotyk tylko budzi
         dash.draw(now);
         setBacklight(BRI_LEVELS[briIdx]);
