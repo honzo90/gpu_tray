@@ -6,8 +6,13 @@
 #   ./build_app.sh              → buduje + instaluje do /Applications (fallback: ~/Applications)
 #   ./build_app.sh --user       → instaluje do ~/Applications
 #   ./build_app.sh <katalog>    → instaluje do wskazanego katalogu
+#
+# APP_VERSION (np. 1.2.0) i APP_BUILD (liczba) ustawiają wersję w Info.plist (CI bierze je z taga).
 set -euo pipefail
 cd "$(dirname "$0")"
+
+APP_VERSION="${APP_VERSION:-1.0.0}"
+APP_BUILD="${APP_BUILD:-1}"
 
 echo "▸ Budowanie (release, arm64)…"
 swift build -c release
@@ -19,7 +24,7 @@ mkdir -p "$APP_ROOT/Contents/MacOS"
 
 echo "▸ Pakowanie ${APP_ROOT}…"
 cp "$BIN" "$APP_ROOT/Contents/MacOS/GPUTray"
-cat > "$APP_ROOT/Contents/Info.plist" <<'PLIST'
+cat > "$APP_ROOT/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -29,8 +34,8 @@ cat > "$APP_ROOT/Contents/Info.plist" <<'PLIST'
     <key>CFBundleName</key><string>GPU Tray</string>
     <key>CFBundleDisplayName</key><string>GPU Tray</string>
     <key>CFBundlePackageType</key><string>APPL</string>
-    <key>CFBundleShortVersionString</key><string>1.0</string>
-    <key>CFBundleVersion</key><string>1</string>
+    <key>CFBundleShortVersionString</key><string>${APP_VERSION}</string>
+    <key>CFBundleVersion</key><string>${APP_BUILD}</string>
     <key>LSMinimumSystemVersion</key><string>13.0</string>
     <key>LSUIElement</key><true/>
     <key>NSHighResolutionCapable</key><true/>

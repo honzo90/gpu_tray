@@ -27,8 +27,13 @@ open /Applications/GPUTray.app
 
 Alternatywnie do katalogu użytkownika: `./build_app.sh --user`.
 
-Gotowe buildy (aplikacja z podpisem ad-hoc i firmware `.bin`) są w artefaktach
-[GitHub Actions](https://github.com/honzo90/gpu_tray/actions/workflows/build.yml) dla każdego pusha do `main`.
+Gotowe buildy (aplikacja z podpisem ad-hoc i firmware `.bin`) są w
+[Releases](https://github.com/honzo90/gpu_tray/releases) — z instrukcją instalacji i wgrywania —
+a wersje rozwojowe w artefaktach [GitHub Actions](https://github.com/honzo90/gpu_tray/actions/workflows/build.yml)
+dla każdego pusha do `main`.
+
+Nowe wydanie: `git tag v1.2.0 && git push origin v1.2.0` — workflow `release.yml` zbuduje wszystko
+i opublikuje release (wersja aplikacji z taga).
 
 **Podpis:** skrypt podpisuje pierwszym certyfikatem „Apple Development" z pęku kluczy
 (inny wskażesz przez `SIGN_ID=<SHA-1 lub nazwa> ./build_app.sh`). Stała tożsamość sprawia,

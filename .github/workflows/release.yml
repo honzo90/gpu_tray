@@ -1,0 +1,79 @@
+# Release: push taga v* (np. git tag v1.2.0 && git push origin v1.2.0)
+# → build aplikacji i firmware (build.yml) → GitHub Release z plikami i sumami SHA-256.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    uses: ./.github/workflows/build.yml
+
+  release:
+    name: GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: art
+
+      - name: Pliki wydania
+        run: |
+          V="${GITHUB_REF_NAME#v}"
+          mkdir out
+          cp art/GPUTray-app/GPUTray-app.zip              "out/GPUTray-$V.zip"
+          cp art/gpu_cyd-firmware/gpu_cyd.ino.merged.bin  "out/gpu_cyd-$V-full.bin"
+          cp art/gpu_cyd-firmware/gpu_cyd.ino.bin         "out/gpu_cyd-$V-update.bin"
+          (cd out && sha256sum * > SHA256SUMS.txt)
+          ls -l out && cat out/SHA256SUMS.txt
+          echo "V=$V" >> "$GITHUB_ENV"
+
+      - name: Opis wydania
+        run: |
+          cat > notes.md <<EOF
+          ## Pliki
+
+          | Plik | Co to |
+          |---|---|
+          | \`GPUTray-$V.zip\` | aplikacja macOS 13+ (Apple Silicon), podpis ad-hoc |
+          | \`gpu_cyd-$V-full.bin\` | pełny obraz firmware CYD od adresu \`0x0\` — **kasuje ustawienia** (Wi-Fi, kalibracja) |
+          | \`gpu_cyd-$V-update.bin\` | sam program od \`0x10000\` — aktualizacja z zachowaniem ustawień |
+          | \`SHA256SUMS.txt\` | sumy kontrolne |
+
+          ## Instalacja aplikacji
+
+          Rozpakuj i przenieś \`GPUTray.app\` do \`/Applications\`. Aplikacja nie jest notaryzowana,
+          więc macOS ją zablokuje przy pierwszym uruchomieniu — zdejmij kwarantannę:
+
+          \`\`\`bash
+          xattr -dr com.apple.quarantine /Applications/GPUTray.app
+          open /Applications/GPUTray.app
+          \`\`\`
+
+          ## Wgrywanie firmware (ESP32-2432S028R)
+
+          \`\`\`bash
+          # pierwsza instalacja (pełny obraz):
+          esptool --chip esp32 --port /dev/cu.usbserial-XXXX write_flash 0x0 gpu_cyd-$V-full.bin
+          # aktualizacja (zachowuje Wi-Fi i kalibrację):
+          esptool --chip esp32 --port /dev/cu.usbserial-XXXX write_flash 0x10000 gpu_cyd-$V-update.bin
+          \`\`\`
+
+          Konfiguracja po pierwszym uruchomieniu: zobacz [README](https://github.com/$GITHUB_REPOSITORY#ekran-cyd-esp32).
+          EOF
+          cat notes.md
+
+      - name: Utworzenie release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" out/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --title "GPU Tray $GITHUB_REF_NAME" \
+            --notes-file notes.md \
+            --generate-notes
