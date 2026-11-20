@@ -64,6 +64,9 @@ jobs:
           esptool --chip esp32 --port /dev/cu.usbserial-XXXX write_flash 0x10000 gpu_cyd-$V-update.bin
           \`\`\`
 
+          Od wersji 1.1.0 aktualizację można też wgrać bez kabla: panel WWW **http://gpu-cyd.local**
+          → *Firmware* → plik \`gpu_cyd-$V-update.bin\`.
+
           Konfiguracja po pierwszym uruchomieniu: zobacz [README](https://github.com/$GITHUB_REPOSITORY#ekran-cyd-esp32).
           EOF
           cat notes.md
