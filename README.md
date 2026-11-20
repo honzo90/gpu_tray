@@ -8,6 +8,11 @@ Natywna aplikacja w pasku menu dla **Apple Silicon**, która pokazuje:
 - **powiadomienia macOS** przy starcie i końcu generowania,
 - **zewnętrzny ekranik** [CYD (ESP32)](#ekran-cyd-esp32) z dashboardem GPU/CPU/RAM/sieci/Ollamy — dane po UDP w sieci lokalnej.
 
+<p align="center">
+  <img src="docs/dashboard.png" width="480" alt="Dashboard na ekranie CYD: wskaźnik GPU, historia 60 s, pasek Ollama z tok/s, kafelki CPU, RAM, VRAM i sieci">
+  <br><sub>Dashboard na CYD (zrzut z płytki, dane testowe z <code>--screen-test</code>)</sub>
+</p>
+
 Zbudowana i przetestowana na **Mac Studio M1 Max, 32 GB, macOS 27.2** z Ollama 0.40.16.
 
 ## Instalacja
@@ -108,14 +113,7 @@ Wszystko zapisuje się w pamięci płytki; po restarcie CYD łączy się automat
 
 ### Dashboard
 
-```
-● host                    12:34:56  ☀ ↻ ⚙
-┌ wskaźnik GPU ┐ ┌ historia GPU 60 s ──┐
-└──────────────┘ └─────────────────────┘
-┌ ● model  3:07 ──────────── 38.5 tok/s ┐
-┌ CPU          ┐ ┌ RAM      24.1 / 32 GB┐
-┌ VRAM         ┐ ┌ SIEC  ▼ 1.23  ▲ 0.12 ┐
-```
+<img src="docs/dashboard.png" width="400" alt="Dashboard na ekranie CYD">
 
 - **kropka w nagłówku**: zielona = dane świeże, czerwona = Mac przestał odpowiadać, szara = jeszcze brak danych,
 - **wskaźnik GPU** (wygładzony) i **historia 60 s** z liniami progów 50% / 85%,
@@ -133,6 +131,19 @@ Wszystko zapisuje się w pamięci płytki; po restarcie CYD łączy się automat
 
 Jasność jest ograniczona do 180/255 celowo: CYD ma słaby stabilizator (AMS1117) i pełne
 podświetlenie razem ze skokiem prądu Wi-Fi potrafi zresetować płytkę.
+
+### Zrzut ekranu
+
+Firmware na literę `S` z portu szeregowego odsyła bufor dashboardu; skrypt zapisuje go jako PNG
+(wymaga tylko `pyserial`):
+
+```bash
+python3 esp32/cyd_screenshot.py zrzut.png --wait 70   # 70 s → pełna historia GPU
+```
+
+Na macOS otwarcie portu resetuje płytkę, stąd `--wait` (domyślnie 12 s) na połączenie z Wi-Fi i dane.
+Neutralny zrzut (host `demo-mac`, przykładowy model) daje `.build/debug/gpu-tray --screen-test`
+uruchomiony zamiast GPU Tray.
 
 ### Tryb nocny
 
@@ -196,6 +207,7 @@ Sources/GPUTray/
 build_app.sh               # build → GPUTray.app → codesign → instalacja
 esp32/
   build_esp32.sh           # kompilacja/wgranie/monitor/erase firmware
+  cyd_screenshot.py        # zrzut ekranu dashboardu do PNG
   gpu_cyd/
     gpu_cyd.ino            # maszyna stanów, UDP, jasność, obrót, tryb nocny
     gfx.h                  # konfiguracja LovyanGFX dla CYD, paleta, helpery

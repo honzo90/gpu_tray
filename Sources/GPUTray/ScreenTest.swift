@@ -18,6 +18,7 @@ enum ScreenTest {
         timer.setEventHandler {
             t += 1
             var s = ESP32Link.Snapshot()
+            s.host = "demo-mac"               // neutralna nazwa (zrzuty ekranu do README)
             s.time = Formatters.time.string(from: Date())
             let wave = sin(t / 9.0)
             s.gpu = max(0, 40 + 35 * wave)
@@ -29,7 +30,7 @@ enum ScreenTest {
             s.netUpMB = max(0, 0.8 + 0.6 * sin(t / 7.0))
             s.busy = sin(t / 45.0) > 0
             if s.busy {
-                s.model = "test-model"
+                s.model = "llama3.2:3b"
                 s.genSeconds = Int(t.truncatingRemainder(dividingBy: 45))
                 s.tokPerSec = 14.2 + 3 * wave
                 s.tokAge = 30

@@ -185,6 +185,11 @@ void dashboardLoop() {
     n = udp.parsePacket();
   }
 
+  // 'S' na porcie szeregowym → zrzut ekranu (esp32/cyd_screenshot.py)
+  while (Serial.available()) {
+    if (Serial.read() == 'S') dash.dumpScreen(now);
+  }
+
   bool night = isNight(now);
   if (night != nightLogged) {
     nightLogged = night;

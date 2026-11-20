@@ -83,6 +83,18 @@ public:
     _toastUntil = now + 1500;
   }
 
+  // Zrzut ekranu przez Serial: nagłówek "[shot] W H 8\n", potem W*H bajtów RGB332
+  // (bufor sprite'a, orientacja logiczna — niezależnie od obrotu 180°). Odbiór: esp32/cyd_screenshot.py
+  void dumpScreen(uint32_t nowMs) {
+    if (!_canvas) { Serial.println("[shot] brak sprite (rysowanie wprost na LCD)"); return; }
+    drawAll(*_canvas, nowMs);                       // świeża klatka
+    Serial.printf("[shot] %d %d 8\n", W, H);
+    Serial.write((const uint8_t*)_canvas->getBuffer(), W * H);
+    Serial.flush();
+    Serial.println();
+    Serial.println("[shot] koniec");
+  }
+
   void draw(uint32_t nowMs) {
     LGFXBase& g = _canvas ? (LGFXBase&)*_canvas : (LGFXBase&)*_lcd;
     drawAll(g, nowMs);
