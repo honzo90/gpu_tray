@@ -33,6 +33,21 @@ IPAddress macIP;
 bool macKnown = false;
 uint32_t tLastReq = 0, tLastDraw = 0;
 
+// Jasność podświetlenia: 5 poziomów, maks. 180/255 — nie pełne 255: CYD ma słabą sekcję
+// zasilania (AMS1117) i pełne podświetlenie + skok prądu Wi-Fi potrafi wybić zasilanie
+// całej płytki. Indeks poziomu w NVS (klucz "bri").
+const uint8_t BRI_LEVELS[] = {20, 50, 90, 135, 180};
+const uint8_t BRI_COUNT = sizeof(BRI_LEVELS);
+const uint8_t BRI_DEFAULT = BRI_COUNT - 1;   // 180 — jak dotychczas
+uint8_t briIdx = BRI_DEFAULT;
+
+void applyBrightness(uint8_t idx, bool save) {
+  briIdx = idx < BRI_COUNT ? idx : BRI_DEFAULT;
+  lcd.setBrightness(BRI_LEVELS[briIdx]);
+  if (save) prefs.putUChar("bri", briIdx);
+  Serial.printf("[ekran] jasnosc %d/%d (%d)\n", briIdx + 1, BRI_COUNT, BRI_LEVELS[briIdx]);
+}
+
 // Obrót o 180°: rotation 3 zamiast 1 + odbicie dotyku (TouchCal::flip); zapis w NVS.
 void applyFlip(bool flip, bool save) {
   tcal.flip = flip;
@@ -45,13 +60,10 @@ void setup() {
   Serial.begin(115200);
   lcd.init();
   lcd.setRotation(1);
-  // 180/255 zamiast pełnej jasności: oszczędność ~40 mA — CYD ma słabą sekcję
-  // zasilania (AMS1117) i pełne podświetlenie + skok prądu Wi-Fi potrafi wybić
-  // zasilanie całej płytki.
-  lcd.setBrightness(180);
   lcd.fillScreen(ui::BG);
 
   prefs.begin("gpucyd", false);
+  applyBrightness(prefs.getUChar("bri", BRI_DEFAULT), false);
   if (prefs.getBool("calv", false)) {
     tcal.sx1 = prefs.getUShort("sx1", 0);  tcal.sx2 = prefs.getUShort("sx2", 1);
     tcal.sy1 = prefs.getUShort("sy1", 0);  tcal.sy2 = prefs.getUShort("sy2", 1);
@@ -138,7 +150,7 @@ void dashboardLoop() {
     n = udp.parsePacket();
   }
 
-  // ⚙ → konfiguracja, ↻ → obrót ekranu o 180°
+  // ⚙ → konfiguracja, ↻ → obrót ekranu o 180°, ☀ → następny poziom jasności (w kółko)
   int x = 0, y = 0;
   if (touchXY(lcd, tcal, &x, &y)) {
     if (dash.hitGear(x, y)) {
@@ -150,6 +162,14 @@ void dashboardLoop() {
       waitRelease(lcd, tcal);
       applyFlip(!tcal.flip, true);
       tLastDraw = 0;               // przerysuj od razu w nowej orientacji
+      return;
+    }
+    if (dash.hitBright(x, y)) {
+      applyBrightness((briIdx + 1) % BRI_COUNT, true);
+      dash.showBrightness(briIdx, BRI_COUNT, millis());
+      dash.draw(millis());         // okienko od razu, jeszcze przed puszczeniem palca
+      waitRelease(lcd, tcal);
+      tLastDraw = millis();
       return;
     }
   }

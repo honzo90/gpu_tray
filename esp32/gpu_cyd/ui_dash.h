@@ -73,6 +73,15 @@ public:
   bool hitGear(int x, int y) const { return x >= W - 26 && y <= 24; }
   // Czy dotknięto ↻ (obok ⚙) → obrót ekranu o 180°.
   bool hitRotate(int x, int y) const { return x >= W - 54 && x < W - 26 && y <= 24; }
+  // Czy dotknięto ☀ (obok ↻) → następny poziom jasności.
+  bool hitBright(int x, int y) const { return x >= W - 82 && x < W - 54 && y <= 24; }
+
+  // Pokazuje na ~1.5 s okienko z poziomem jasności (level 0..levels-1).
+  void showBrightness(int level, int levels, uint32_t now) {
+    _briLevel = level;
+    _briLevels = levels;
+    _toastUntil = now + 1500;
+  }
 
   void draw(uint32_t nowMs) {
     LGFXBase& g = _canvas ? (LGFXBase&)*_canvas : (LGFXBase&)*_lcd;
@@ -83,6 +92,9 @@ public:
   }
 
 private:
+  int _briLevel = 0, _briLevels = 1;
+  uint32_t _toastUntil = 0;
+
   LGFX* _lcd = nullptr;
   lgfx::LGFX_Sprite* _canvas = nullptr;
 
@@ -118,6 +130,35 @@ private:
     tile(g, x2,   150, tw, th, "RAM",  fmtNum(st.mem), fmtTot(st.memT), memF);
     tile(g, MARG, 195, tw, th, "VRAM", fmtNum(st.vgpu), fmtTot(st.memT), vF);
     netTile(g, x2, 195, tw, th);
+
+    if ((int32_t)(_toastUntil - now) > 0) drawBrightToast(g);   // odporne na przepełnienie millis()
+  }
+
+  // ── okienko „Jasnosc" z segmentami poziomu (na wierzchu)
+  void drawBrightToast(lgfx::LGFXBase& g) {
+    const int w = 168, h = 58, x = (W - w) / 2, y = 92;
+    g.fillRoundRect(x - 2, y - 2, w + 4, h + 4, 9, ui::BG);    // obwódka odcina od tła
+    g.fillRoundRect(x, y, w, h, 8, ui::PANEL2);
+    drawSunIcon(g, x + 18, y + 18, ui::TEXT);
+    g.setFont(&fonts::DejaVu18);
+    g.setTextColor(ui::TEXT);
+    g.setTextDatum(lgfx::middle_left);
+    g.drawString("Jasnosc", x + 34, y + 18);
+    g.setTextDatum(lgfx::top_left);
+    const int gap = 4, sx = x + 12, sw = (w - 24 - gap * (_briLevels - 1)) / _briLevels;
+    for (int i = 0; i < _briLevels; i++) {
+      g.fillRoundRect(sx + i * (sw + gap), y + 38, sw, 10, 3, i <= _briLevel ? ui::ORANGE : ui::PANEL);
+    }
+  }
+
+  // ☀ — kółko + 8 promieni
+  static void drawSunIcon(lgfx::LGFXBase& g, int cx, int cy, uint16_t c) {
+    g.fillCircle(cx, cy, 3, c);
+    for (int i = 0; i < 8; i++) {
+      float a = i * PI / 4;
+      g.drawLine(cx + (int)roundf(cosf(a) * 5), cy + (int)roundf(sinf(a) * 5),
+                 cx + (int)roundf(cosf(a) * 7), cy + (int)roundf(sinf(a) * 7), c);
+    }
   }
 
   static void card(lgfx::LGFXBase& g, int x, int y, int w, int h, uint16_t c = ui::PANEL) {
@@ -130,13 +171,17 @@ private:
     // kropka „live": zielona = dane świeże, czerwona = urwało się, szara = jeszcze nic
     g.fillCircle(MARG + 4, cy, 3, fresh ? ui::GREEN : (st.everRx ? ui::RED : ui::DIM));
     g.setFont(&fonts::DejaVu12);
-    g.setTextColor(ui::TEXT);
-    g.setTextDatum(lgfx::middle_left);
-    g.drawString(st.host[0] ? st.host : "gpu-tray", MARG + 13, cy);
+    // zegar przy ikonach, host przycięty do miejsca, które zostaje
+    const int timeRight = W - 86;
     g.setTextColor(ui::DIM);
     g.setTextDatum(lgfx::middle_right);
-    g.drawString(st.time, W - 58, cy);
+    g.drawString(st.time, timeRight, cy);
+    int hostMax = timeRight - g.textWidth(st.time) - 10 - (MARG + 13);
+    g.setTextColor(ui::TEXT);
+    g.setTextDatum(lgfx::middle_left);
+    g.drawString(fitText(g, st.host[0] ? st.host : "gpu-tray", hostMax), MARG + 13, cy);
 
+    drawSunIcon(g, W - 68, cy, ui::DIM);
     drawRotateIcon(g, W - 40, cy);
 
     // ⚙ (pierścień + zęby)
