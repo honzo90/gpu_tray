@@ -40,13 +40,48 @@ const uint8_t BRI_LEVELS[] = {20, 50, 90, 135, 180};
 const uint8_t BRI_COUNT = sizeof(BRI_LEVELS);
 const uint8_t BRI_DEFAULT = BRI_COUNT - 1;   // 180 — jak dotychczas
 uint8_t briIdx = BRI_DEFAULT;
+int16_t blNow = -1;                          // aktualnie ustawione podświetlenie (-1 = nieznane)
+
+// Ustawia podświetlenie tylko przy zmianie (setBrightness to zapis PWM — bez sensu co pętlę).
+void setBacklight(uint8_t v) {
+  if (blNow == v) return;
+  lcd.setBrightness(v);
+  blNow = v;
+}
 
 void applyBrightness(uint8_t idx, bool save) {
   briIdx = idx < BRI_COUNT ? idx : BRI_DEFAULT;
-  lcd.setBrightness(BRI_LEVELS[briIdx]);
+  setBacklight(BRI_LEVELS[briIdx]);
   if (save) prefs.putUChar("bri", briIdx);
   Serial.printf("[ekran] jasnosc %d/%d (%d)\n", briIdx + 1, BRI_COUNT, BRI_LEVELS[briIdx]);
 }
+
+// ---- Tryb nocny: w godzinach NIGHT_FROM..NIGHT_TO podświetlenie wyłączone (0).
+// Czas z zegara Maca (pole "t" w pakiecie), między pakietami dociągany z millis().
+// Dotknięcie budzi ekran na NIGHT_WAKE_MS (pierwsze dotknięcie tylko budzi).
+const int NIGHT_FROM = 22 * 60;              // minuty od północy: 22:00
+const int NIGHT_TO   = 7 * 60;               // 7:00
+const uint32_t NIGHT_WAKE_MS = 30000;
+uint32_t wakeUntil = 0;
+bool nightLogged = false;
+
+// Minuta doby wg zegara Maca; -1 gdy jeszcze nie znamy czasu.
+int macMinuteOfDay(uint32_t now) {
+  if (!dash.st.everRx) return -1;
+  int h = 0, m = 0;
+  if (sscanf(dash.st.time, "%d:%d", &h, &m) != 2 || h < 0 || h > 23 || m < 0 || m > 59) return -1;
+  uint32_t elapsedMin = (now - dash.st.rxMs) / 60000;
+  return (int)((h * 60 + m + elapsedMin) % 1440);
+}
+
+bool isNight(uint32_t now) {
+  int m = macMinuteOfDay(now);
+  if (m < 0) return false;                   // bez czasu — normalna jasność
+  return NIGHT_FROM > NIGHT_TO ? (m >= NIGHT_FROM || m < NIGHT_TO)   // okno przez północ
+                               : (m >= NIGHT_FROM && m < NIGHT_TO);
+}
+
+bool nightAwake(uint32_t now) { return (int32_t)(wakeUntil - now) > 0; }
 
 // Obrót o 180°: rotation 3 zamiast 1 + odbicie dotyku (TouchCal::flip); zapis w NVS.
 void applyFlip(bool flip, bool save) {
@@ -150,9 +185,26 @@ void dashboardLoop() {
     n = udp.parsePacket();
   }
 
+  bool night = isNight(now);
+  if (night != nightLogged) {
+    nightLogged = night;
+    Serial.printf("[noc] tryb nocny %s (%s)\n", night ? "ON" : "OFF", dash.st.time);
+  }
+
   // ⚙ → konfiguracja, ↻ → obrót ekranu o 180°, ☀ → następny poziom jasności (w kółko)
   int x = 0, y = 0;
   if (touchXY(lcd, tcal, &x, &y)) {
+    if (night) {
+      bool wasAwake = nightAwake(now);
+      wakeUntil = now + NIGHT_WAKE_MS;      // każde dotknięcie przedłuża
+      if (!wasAwake) {                       // wygaszony ekran: dotyk tylko budzi
+        dash.draw(now);
+        setBacklight(BRI_LEVELS[briIdx]);
+        waitRelease(lcd, tcal);
+        tLastDraw = millis();
+        return;
+      }
+    }
     if (dash.hitGear(x, y)) {
       waitRelease(lcd, tcal);
       stage = Stage::Setup;
@@ -174,6 +226,9 @@ void dashboardLoop() {
     }
   }
 
+  // podświetlenie: noc bez wybudzenia → 0, inaczej wybrany poziom
+  setBacklight(night && !nightAwake(now) ? 0 : BRI_LEVELS[briIdx]);
+
   // rysowanie: 250 ms gdy Ollama pracuje (puls), inaczej 500 ms
   bool busyLive = dash.st.busy && dash.st.everRx && (now - dash.st.rxMs < 5000);
   if (now - tLastDraw >= (busyLive ? 250 : 500)) {
@@ -187,12 +242,14 @@ void loop() {
   switch (stage) {
     case Stage::Calibrate:
       Serial.println("[etap] kalibracja dotyku");
+      setBacklight(BRI_LEVELS[briIdx]);     // konfiguracja zawsze widoczna (też w nocy)
       runCalibration(lcd, prefs, tcal);
       stage = cfgSSID.isEmpty() ? Stage::Setup : Stage::Connect;
       break;
 
     case Stage::Setup: {
       Serial.println("[etap] konfiguracja Wi-Fi");
+      setBacklight(BRI_LEVELS[briIdx]);     // konfiguracja zawsze widoczna (też w nocy)
       String ssid, pass;
       if (runWifiSetup(lcd, tcal, prefs, cfgSSID, ssid, pass)) {
         cfgSSID = ssid;
