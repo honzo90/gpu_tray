@@ -12,6 +12,9 @@ struct TouchCal {
   bool xFromY = false;         // ekranowa oś X pochodzi z raw Y (swap dla części płytek)
   bool yFromX = false;
   bool valid = false;
+  // Ekran obrócony o 180° (setRotation 3 zamiast 1). Kalibracja jest zawsze zapisana
+  // dla orientacji bazowej — przy flip tylko odbijamy wynik (x → 319-x, y → 239-y).
+  bool flip = false;
 };
 
 inline int32_t calMap(int32_t v, int32_t a, int32_t b, int32_t s1, int32_t s2) {
@@ -27,8 +30,11 @@ inline bool touchXY(LGFX& lcd, const TouchCal& c, int* ox, int* oy) {
   int32_t rawY = c.yFromX ? rx : ry;
   int32_t x = calMap(rawX, c.sx1, c.sx2, 24, 296);
   int32_t y = calMap(rawY, c.sy1, c.sy2, 24, 216);
-  if (ox) *ox = x < 0 ? 0 : (x > 319 ? 319 : x);
-  if (oy) *oy = y < 0 ? 0 : (y > 239 ? 239 : y);
+  x = x < 0 ? 0 : (x > 319 ? 319 : x);
+  y = y < 0 ? 0 : (y > 239 ? 239 : y);
+  if (c.flip) { x = 319 - x; y = 239 - y; }
+  if (ox) *ox = x;
+  if (oy) *oy = y;
   return true;
 }
 
@@ -42,7 +48,8 @@ inline void waitRelease(LGFX& lcd, const TouchCal& c) {
 }
 
 // ---- Kalibracja: 4 cele (osie rozdzielone, wykrywa też zamienione osie X/Y)
-inline bool runCalibration(LGFX& lcd, Preferences& prefs, TouchCal& cal) {
+// Zawsze w orientacji bazowej (rotation 1, bez flip) — patrz runCalibration niżej.
+inline bool runCalibrationBase(LGFX& lcd, Preferences& prefs, TouchCal& cal) {
   struct Target { int x, y; const char* tag; };
   const Target t[4] = {
     {24, 120, "1/4"}, {296, 120, "2/4"}, {160, 24, "3/4"}, {160, 216, "4/4"},
@@ -113,7 +120,7 @@ inline bool runCalibration(LGFX& lcd, Preferences& prefs, TouchCal& cal) {
   while (!touchXY(lcd, cal, &x, &y)) delay(15);
   bool good = uiHit(ok, x, y);
   waitRelease(lcd, cal);
-  if (!good) return runCalibration(lcd, prefs, cal);   // pudło → kalibracja od nowa
+  if (!good) return runCalibrationBase(lcd, prefs, cal);   // pudło → kalibracja od nowa
 
   prefs.putUShort("sx1", cal.sx1);
   prefs.putUShort("sx2", cal.sx2);
@@ -123,6 +130,18 @@ inline bool runCalibration(LGFX& lcd, Preferences& prefs, TouchCal& cal) {
   prefs.putBool("yfx", cal.yFromX);
   prefs.putBool("calv", true);
   return true;
+}
+
+// Kalibracja niezależna od obrotu: na jej czas orientacja bazowa, potem powrót.
+inline bool runCalibration(LGFX& lcd, Preferences& prefs, TouchCal& cal) {
+  bool flip = cal.flip;
+  cal.flip = false;
+  lcd.setRotation(1);
+  bool r = runCalibrationBase(lcd, prefs, cal);
+  cal.flip = flip;
+  lcd.setRotation(flip ? 3 : 1);
+  lcd.fillScreen(ui::BG);
+  return r;
 }
 
 // ---- Ekrany łączenia (sterowane z gpu_cyd.ino)

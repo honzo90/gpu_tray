@@ -71,6 +71,8 @@ public:
 
   // Czy dotknięto ⚙ (prawy górny róg) → konfiguracja Wi-Fi.
   bool hitGear(int x, int y) const { return x >= W - 26 && y <= 24; }
+  // Czy dotknięto ↻ (obok ⚙) → obrót ekranu o 180°.
+  bool hitRotate(int x, int y) const { return x >= W - 54 && x < W - 26 && y <= 24; }
 
   void draw(uint32_t nowMs) {
     LGFXBase& g = _canvas ? (LGFXBase&)*_canvas : (LGFXBase&)*_lcd;
@@ -133,7 +135,9 @@ private:
     g.drawString(st.host[0] ? st.host : "gpu-tray", MARG + 13, cy);
     g.setTextColor(ui::DIM);
     g.setTextDatum(lgfx::middle_right);
-    g.drawString(st.time, W - 30, cy);
+    g.drawString(st.time, W - 58, cy);
+
+    drawRotateIcon(g, W - 40, cy);
 
     // ⚙ (pierścień + zęby)
     int cx = W - 14, r = 7;
@@ -144,6 +148,20 @@ private:
       g.fillRect(cx + (int)(cosf(a) * r) - 1, cy + (int)(sinf(a) * r) - 1, 3, 3, ui::DIM);
     }
     g.setTextDatum(lgfx::top_left);
+  }
+
+  // ↻ — łuk 270° z grotem na końcu (kąty: 0° = godz. 3, rosną zgodnie z zegarem)
+  static void drawRotateIcon(lgfx::LGFXBase& g, int cx, int cy) {
+    const float A1 = 210;
+    g.fillArc(cx, cy, 5, 7, 300, 360, ui::DIM);   // dwa odcinki: bez ujemnych kątów
+    g.fillArc(cx, cy, 5, 7, 0, A1, ui::DIM);
+    float a = A1 * PI / 180.0f;
+    float px = cx + cosf(a) * 6, py = cy + sinf(a) * 6;      // koniec łuku
+    float tx = -sinf(a), ty = cosf(a);                         // styczna (kierunek łuku)
+    float nx = cosf(a), ny = sinf(a);                          // normalna (na zewnątrz)
+    g.fillTriangle((int)roundf(px + tx * 4), (int)roundf(py + ty * 4),
+                   (int)roundf(px + nx * 3.5f), (int)roundf(py + ny * 3.5f),
+                   (int)roundf(px - nx * 3.5f), (int)roundf(py - ny * 3.5f), ui::DIM);
   }
 
   // ── okrągły wskaźnik GPU (łuk 270°, zaokrąglone końce)

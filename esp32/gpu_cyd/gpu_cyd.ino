@@ -33,6 +33,14 @@ IPAddress macIP;
 bool macKnown = false;
 uint32_t tLastReq = 0, tLastDraw = 0;
 
+// Obrót o 180°: rotation 3 zamiast 1 + odbicie dotyku (TouchCal::flip); zapis w NVS.
+void applyFlip(bool flip, bool save) {
+  tcal.flip = flip;
+  lcd.setRotation(flip ? 3 : 1);
+  if (save) prefs.putBool("rot180", flip);
+  Serial.printf("[ekran] obrot 180 = %d\n", (int)flip);
+}
+
 void setup() {
   Serial.begin(115200);
   lcd.init();
@@ -53,6 +61,8 @@ void setup() {
   }
   cfgSSID = prefs.getString("ssid", "");
   cfgPass = prefs.getString("pass", "");
+  applyFlip(prefs.getBool("rot180", false), false);
+  lcd.fillScreen(ui::BG);
 
   dash.begin(lcd);
   WiFi.mode(WIFI_STA);
@@ -128,12 +138,20 @@ void dashboardLoop() {
     n = udp.parsePacket();
   }
 
-  // ⚙ → konfiguracja
+  // ⚙ → konfiguracja, ↻ → obrót ekranu o 180°
   int x = 0, y = 0;
-  if (touchXY(lcd, tcal, &x, &y) && dash.hitGear(x, y)) {
-    waitRelease(lcd, tcal);
-    stage = Stage::Setup;
-    return;
+  if (touchXY(lcd, tcal, &x, &y)) {
+    if (dash.hitGear(x, y)) {
+      waitRelease(lcd, tcal);
+      stage = Stage::Setup;
+      return;
+    }
+    if (dash.hitRotate(x, y)) {
+      waitRelease(lcd, tcal);
+      applyFlip(!tcal.flip, true);
+      tLastDraw = 0;               // przerysuj od razu w nowej orientacji
+      return;
+    }
   }
 
   // rysowanie: 250 ms gdy Ollama pracuje (puls), inaczej 500 ms
