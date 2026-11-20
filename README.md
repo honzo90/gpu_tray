@@ -1,5 +1,8 @@
 # GPU Tray (macOS)
 
+[![Build](https://github.com/honzo90/gpu_tray/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/honzo90/gpu_tray/actions/workflows/build.yml)
+[![Licencja: MIT](https://img.shields.io/badge/licencja-MIT-blue.svg)](LICENSE)
+
 Natywna aplikacja w pasku menu dla **Apple Silicon**, która pokazuje:
 
 - **użycie GPU na żywo** (co 1 s, bez uprawnień root — odczyt z IOKit `AGXAccelerator`),
@@ -23,6 +26,9 @@ open /Applications/GPUTray.app
 ```
 
 Alternatywnie do katalogu użytkownika: `./build_app.sh --user`.
+
+Gotowe buildy (aplikacja z podpisem ad-hoc i firmware `.bin`) są w artefaktach
+[GitHub Actions](https://github.com/honzo90/gpu_tray/actions/workflows/build.yml) dla każdego pusha do `main`.
 
 **Podpis:** skrypt podpisuje pierwszym certyfikatem „Apple Development" z pęku kluczy
 (inny wskażesz przez `SIGN_ID=<SHA-1 lub nazwa> ./build_app.sh`). Stała tożsamość sprawia,
