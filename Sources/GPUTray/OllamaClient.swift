@@ -72,8 +72,8 @@ struct PSResponse: Codable {
 }
 
 /// Klient HTTP serwera Ollama z auto-detekcją adresu.
-/// Uwaga: na tej maszynie Ollama słucha na IP LAN (np. http://192.168.1.50:11434),
-/// a NIE na localhost — dlatego probe'ujemy kilka kandydatów.
+/// Uwaga: Ollama z OLLAMA_HOST=0.0.0.0 lub IP LAN (np. http://192.168.1.50:11434)
+/// nie musi odpowiadać na localhost — dlatego probe'ujemy kilka kandydatów.
 final class OllamaClient: @unchecked Sendable {
     private let lock = NSLock()
     private var _baseURL: URL?

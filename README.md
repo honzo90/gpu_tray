@@ -49,8 +49,15 @@ Alternatywnie do katalogu użytkownika: `./build_app.sh --user`.
 | `ollamaBaseURL` | auto | wymuszony adres serwera (np. `http://192.168.1.50:11434`) |
 | `ollamaPort` | `11434` | port serwera Ollama |
 
-Auto-detekcja adresu serwera: `127.0.0.1` → `localhost` → adresy nasłuchu z `lsof`.
-Na tej maszynie Ollama słucha na IP LAN (`192.168.1.50:11434`), a nie na localhost — aplikacja sama to wykrywa.
+Auto-detekcja adresu serwera: `ollamaBaseURL` (jeśli ustawiony) → `127.0.0.1` → `localhost` → adresy nasłuchu z `lsof`.
+Jeśli Ollama słucha tylko na IP LAN (np. `OLLAMA_HOST=192.168.1.50`), aplikacja sama to wykrywa.
+
+Przykład — wymuszenie adresu i powrót do auto-detekcji (po zmianie zrestartuj GPU Tray):
+
+```bash
+defaults write com.gputray.app ollamaBaseURL "http://192.168.1.50:11434"
+defaults delete com.gputray.app ollamaBaseURL
+```
 
 ## Diagnostyka
 
