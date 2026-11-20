@@ -178,6 +178,18 @@ bool connectFlow() {
   return false;
 }
 
+// Czeka, aż palec będzie trzymany ms milisekund (krótkie zaniki odczytu < 150 ms wybaczamy).
+bool holdTouch(uint32_t ms) {
+  uint32_t t0 = millis(), lastOn = t0;
+  int x, y;
+  while (millis() - t0 < ms) {
+    if (touchXY(lcd, tcal, &x, &y)) lastOn = millis();
+    else if (millis() - lastOn > 150) return false;
+    delay(15);
+  }
+  return true;
+}
+
 void dashboardLoop() {
   webLoop();
   uint32_t now = millis();
@@ -217,6 +229,9 @@ void dashboardLoop() {
     n = udp.parsePacket();
   }
 
+  // kod logowania do panelu WWW zajmuje ekran (dane z Maca wyżej nadal odbieramy)
+  if (loginTick(now)) { delay(10); return; }
+
   // 'S' na porcie szeregowym → zrzut ekranu (esp32/cyd_screenshot.py)
   while (Serial.available()) {
     if (Serial.read() == 'S') dash.dumpScreen(now);
@@ -241,6 +256,11 @@ void dashboardLoop() {
         tLastDraw = millis();
         return;
       }
+    }
+    if (dash.hitHost(x, y)) {      // ukryty gest: przytrzymaj 1,5 s → kod logowania WWW
+      if (holdTouch(1500)) startLogin(true);
+      waitRelease(lcd, tcal);
+      return;
     }
     if (dash.hitGear(x, y)) {
       waitRelease(lcd, tcal);

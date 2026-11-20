@@ -174,14 +174,31 @@ Po połączeniu z Wi-Fi CYD wystawia stronę ustawień pod **http://gpu-cyd.loca
 - **Wi-Fi**: skanowanie, wybór sieci, hasło (puste przy tej samej sieci = bez zmiany) → zapis i restart,
 - **firmware**: wersja i aktualizacja przez przeglądarkę (OTA) plikiem `gpu_cyd-<v>-update.bin`
   z [Releases](https://github.com/honzo90/gpu_tray/releases) — ustawienia zostają, kabel niepotrzebny,
-- **urządzenie**: restart, ponowna kalibracja dotyku.
+- **urządzenie**: restart, ponowna kalibracja dotyku, wylogowanie.
 
-Panel nie ma logowania — działa wyłącznie w sieci lokalnej, tak jak komunikacja z Makiem.
-API (JSON) do skryptów: `GET /api/status`, `GET|POST /api/settings`, `GET /api/scan`,
-`POST /api/wifi`, `/api/restart`, `/api/calibrate`, `/api/update` (multipart), np.:
+#### Logowanie
+
+Panel jest chroniony kodem z ekranu CYD — kto nie widzi ekranu, ten się nie zaloguje:
+
+1. **Ukryty gest na CYD**: przytrzymaj ok. 1,5 s nazwę hosta w nagłówku dashboardu
+   (albo w panelu kliknij *Pokaż kod na ekranie CYD*).
+2. CYD przez 60 s pokazuje **kod QR** i **6 cyfr** (także w trybie nocnym; dotknięcie ekranu anuluje).
+3. Zeskanuj QR telefonem — od razu otwiera zalogowany panel — albo wpisz cyfry w przeglądarce.
+
+Przeglądarka zostaje zalogowana na rok (cookie `HttpOnly`); CYD pamięta 4 ostatnie przeglądarki
+(NVS `toks`). W panelu: *Wyloguj* / *Wyloguj wszystkie przeglądarki*. Ochrona przed zgadywaniem:
+nowy kod z sieci najwyżej raz na minutę, 5 prób na kod. Bez tokenu każde `/api/*` zwraca 401,
+a aktualizacja firmware odrzuca plik, zanim cokolwiek zapisze do flasha.
+
+#### API
+
+JSON do skryptów (wymaga cookie `cydtok`): `GET /api/status`, `GET|POST /api/settings`,
+`GET /api/scan`, `POST /api/wifi`, `/api/restart`, `/api/calibrate`, `/api/update` (multipart);
+logowanie: `POST /api/login/start`, `POST /api/login {"code":"123456"}`, `POST /api/logout`. Np.:
 
 ```bash
-curl -s http://gpu-cyd.local/api/settings -H 'Content-Type: application/json' -d '{"bri":2,"night":{"from":"23:00","to":"06:30"}}'
+curl -s -c cyd.txt http://gpu-cyd.local/api/login -H 'Content-Type: application/json' -d '{"code":"123456"}'
+curl -s -b cyd.txt http://gpu-cyd.local/api/settings -H 'Content-Type: application/json' -d '{"bri":2,"night":{"from":"23:00","to":"06:30"}}'
 ```
 
 ### Ustawienia w pamięci płytki (NVS, przestrzeń `gpucyd`)
@@ -193,6 +210,7 @@ curl -s http://gpu-cyd.local/api/settings -H 'Content-Type: application/json' -d
 | `rot180` | obrót o 180° |
 | `bri` | poziom jasności (indeks 0–4) |
 | `non`, `nfr`, `nto`, `nwk` | tryb nocny: włączony, od / do (minuty od północy), wybudzenie (s) |
+| `toks` | tokeny zalogowanych przeglądarek panelu WWW (do 4) |
 
 Reset wszystkich ustawień: `./build_esp32.sh erase`, potem ponowne wgranie.
 
@@ -246,7 +264,7 @@ esp32/
     gfx.h                  # konfiguracja LovyanGFX dla CYD, paleta, helpery
     ui_dash.h              # dashboard (sprite 8bpp, bez migotania)
     ui_wifi.h              # kalibracja dotyku, lista sieci, klawiatura
-    web.h                  # panel WWW z ustawieniami + API JSON + OTA
+    web.h                  # panel WWW: ustawienia, API JSON, OTA, logowanie kodem/QR
 ```
 
 ## Licencja

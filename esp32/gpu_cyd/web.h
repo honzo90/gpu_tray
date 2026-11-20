@@ -9,9 +9,15 @@
 //   POST /api/wifi       JSON {ssid, pass} → zapis + restart (pusty pass = bez zmiany przy tym samym SSID)
 //   POST /api/restart    restart
 //   POST /api/calibrate  kasuje kalibrację dotyku → restart → kalibracja na ekranie
+//   POST /api/login/start, /api/login, /api/logout {all}   logowanie (patrz niżej)
 //   POST /api/update     upload pliku .bin (gpu_cyd-<v>-update.bin) → OTA → restart
 //
-// Bez logowania — panel działa tylko w sieci lokalnej (jak cała komunikacja z Makiem).
+// Logowanie kodem z ekranu: POST /api/login/start (albo ukryty gest na CYD: przytrzymanie
+// nazwy hosta w nagłówku 1,5 s) → CYD pokazuje przez 60 s kod QR + 6 cyfr →
+// telefon skanuje QR (GET /login?c=KOD) albo wpisujesz cyfry (POST /api/login {code})
+// → token w cookie (HttpOnly, rok). Do 4 zapamiętanych przeglądarek
+// (NVS "toks"). Bez tokenu każde /api/* (poza logowaniem) → 401; OTA sprawdza token,
+// zanim cokolwiek zapisze do flasha. Nowy kod najwyżej raz na 60 s, 5 prób na kod.
 // Plik dołączany w gpu_cyd.ino PO definicjach globali i funkcji apply* (używa ich wprost).
 #pragma once
 #include <WebServer.h>
@@ -39,7 +45,7 @@ h1{font-size:20px;margin:4px 0 2px}
 .card h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--dim);margin:0 0 12px}
 .row{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:6px 0}
 .row+.row{border-top:1px solid var(--line)}
-.row label{flex:1}
+.row label:not(.sw){flex:1}
 .k{color:var(--dim)}
 .v{font-variant-numeric:tabular-nums;text-align:right;word-break:break-all}
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;background:var(--dim)}
@@ -55,7 +61,7 @@ button{background:var(--line);color:var(--text);border:0;border-radius:8px;paddi
 button.pri{background:var(--acc);color:#fff}
 button.danger{background:transparent;color:var(--bad);border:1px solid var(--bad)}
 button:disabled{opacity:.5;cursor:default}
-.sw{position:relative;width:46px;height:26px;flex:none}
+.sw{position:relative;display:inline-block;width:46px;height:26px;flex:0 0 46px}
 .sw input{opacity:0;width:0;height:0}
 .sw span{position:absolute;inset:0;background:var(--line);border-radius:13px;transition:.15s;cursor:pointer}
 .sw span:before{content:"";position:absolute;width:20px;height:20px;left:3px;top:3px;background:#fff;border-radius:50%;transition:.15s}
@@ -69,10 +75,25 @@ progress{width:100%;height:8px;accent-color:var(--acc)}
 #toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:var(--text);color:var(--bg);
  padding:9px 16px;border-radius:20px;font-size:14px;opacity:0;transition:opacity .2s;pointer-events:none}
 #toast.on{opacity:1}
+.code{font:600 28px/1 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.35em;text-align:center;width:100%;padding:12px}
+.center{text-align:center}
 </style></head><body><main>
 <h1>GPU CYD</h1>
 <div class="sub" id="sub">Ustawienia ekranu</div>
 
+<div class="card" id="login" hidden><h2>Logowanie</h2>
+ <div class="stack">
+  <p class="hint" style="margin:0 0 4px">Panel jest chroniony. Kod (QR + 6 cyfr) pojawi się na ekranie CYD na 60 sekund —
+  zeskanuj QR telefonem albo wpisz cyfry tutaj.</p>
+  <button class="pri" id="lStart">Pokaż kod na ekranie CYD</button>
+  <div class="stack" id="lForm" hidden>
+   <input class="code" id="lCode" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="000000">
+   <button class="pri" id="lGo">Zaloguj</button>
+   <div class="hint center" id="lTtl"></div>
+  </div>
+ </div>
+</div>
+<div id="app" hidden>
 <div class="card"><h2>Stan</h2>
  <div class="row"><span class="k">Mac</span><span class="v" id="sMac">-</span></div>
  <div class="row"><span class="k">Czas (Mac)</span><span class="v" id="sTime">-</span></div>
@@ -124,6 +145,11 @@ progress{width:100%;height:8px;accent-color:var(--acc)}
   <button id="restart">Uruchom ponownie</button>
   <button class="danger" id="calib">Kalibracja dotyku</button>
  </div>
+ <div class="actions" style="margin-top:8px">
+  <button id="logout">Wyloguj</button>
+  <button id="logoutAll">Wyloguj wszystkie przeglądarki</button>
+ </div>
+</div>
 </div>
 </main><div id="toast"></div>
 <script>
@@ -131,7 +157,9 @@ const $=id=>document.getElementById(id);
 const BRI=[20,50,90,135,180];
 let saveT=null;
 function toast(t){const e=$('toast');e.textContent=t;e.classList.add('on');clearTimeout(e._t);e._t=setTimeout(()=>e.classList.remove('on'),1800)}
+let authed=false,ttlT=null;
 async function api(p,body){const r=await fetch(p,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
+ if(r.status==401&&!p.startsWith('/api/login')){showLogin();throw new Error('zaloguj się')}
  if(!r.ok)throw new Error(await r.text()||r.status);return r.headers.get('content-type')?.includes('json')?r.json():r.text()}
 function hm(m){return String(Math.floor(m/60)).padStart(2,'0')+':'+String(m%60).padStart(2,'0')}
 function dur(s){const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);return (d?d+' d ':'')+(d||h?h+' h ':'')+m+' min'}
@@ -140,14 +168,27 @@ async function load(){const s=await api('/api/settings');
  $('bri').value=s.bri+1;briLabel();$('rot').checked=s.rot180;
  $('non').checked=s.night.on;$('nfr').value=s.night.from;$('nto').value=s.night.to;$('nwk').value=s.night.wake;
  $('ssid').value=s.ssid}
-async function status(){try{const s=await api('/api/status');
+function showLogin(){authed=false;$('app').hidden=true;$('login').hidden=false;$('sub').textContent='Zaloguj się kodem z ekranu CYD'}
+async function showApp(){await load();authed=true;$('login').hidden=true;$('app').hidden=false;status()}
+function countdown(ttl){clearInterval(ttlT);let t=ttl;const f=()=>{$('lTtl').textContent=t>0?'Kod ważny jeszcze '+t+' s':'Kod wygasł — poproś o nowy';
+ $('lStart').disabled=t>0;if(t--<=0)clearInterval(ttlT)};f();ttlT=setInterval(f,1000)}
+$('lStart').onclick=async()=>{try{const r=await api('/api/login/start',{});$('lForm').hidden=false;$('lCode').value='';$('lCode').focus();countdown(r.ttl)}
+ catch(e){toast(e.message)}};
+async function doLogin(){const code=$('lCode').value.trim();if(code.length!=6)return toast('Kod ma 6 cyfr');
+ try{await api('/api/login',{code});clearInterval(ttlT);$('lForm').hidden=true;$('lStart').disabled=false;toast('Zalogowano');showApp()}
+ catch(e){toast(e.message);$('lCode').select()}}
+$('lGo').onclick=doLogin;
+$('lCode').oninput=e=>{e.target.value=e.target.value.replace(/\D/g,'').slice(0,6);if(e.target.value.length==6)doLogin()};
+$('logout').onclick=async()=>{await api('/api/logout',{}).catch(()=>{});showLogin()};
+$('logoutAll').onclick=async()=>{if(!confirm('Wylogować wszystkie przeglądarki (też tę)?'))return;await api('/api/logout',{all:true}).catch(()=>{});showLogin()};
+async function status(){if(!authed)return;try{const s=await api('/api/status');
  $('sub').textContent=s.ip+' · '+s.hostname+'.local';
  $('sMac').innerHTML=s.mac.ok?'<span class="dot ok"></span>'+(s.mac.host||'')+' ('+s.mac.ip+')'
    :'<span class="dot bad"></span>'+(s.mac.ip?'brak danych od '+s.mac.age+' s':'nie znaleziono');
  $('sTime').textContent=s.time||'-';
  $('sWifi').textContent=s.ssid+' · '+s.rssi+' dBm';
  $('sNight').textContent=s.night?(s.awake?'noc (wybudzony)':'noc (wygaszony)'):'dzień';
- $('sUp').textContent=dur(s.uptime);$('sFw').textContent=s.fw}catch(e){$('sub').textContent='Brak połączenia z CYD'}}
+ $('sUp').textContent=dur(s.uptime);$('sFw').textContent=s.fw}catch(e){if(authed)$('sub').textContent='Brak połączenia z CYD'}}
 function collect(){return{bri:$('bri').value-1,rot180:$('rot').checked,
  night:{on:$('non').checked,from:$('nfr').value,to:$('nto').value,wake:+$('nwk').value}}}
 function save(){clearTimeout(saveT);saveT=setTimeout(async()=>{try{await api('/api/settings',collect());toast('Zapisano');status()}catch(e){toast('Błąd: '+e.message)}},250)}
@@ -168,13 +209,210 @@ $('fwUp').onclick=()=>{const f=$('fw').files[0];if(!f)return toast('Wybierz plik
  if(!confirm('Wgrać '+f.name+' ('+Math.round(f.size/1024)+' KB)?'))return;
  const x=new XMLHttpRequest(),fd=new FormData(),p=$('fwP');fd.append('fw',f);p.hidden=false;p.value=0;$('fwUp').disabled=true;
  x.upload.onprogress=e=>{if(e.lengthComputable)p.value=e.loaded*100/e.total};
- x.onload=()=>{$('fwUp').disabled=false;toast(x.status==200?'Wgrano — restart':'Błąd: '+x.responseText);if(x.status==200)setTimeout(()=>location.reload(),9000)};
+ x.onload=()=>{$('fwUp').disabled=false;if(x.status==401)return showLogin();toast(x.status==200?'Wgrano — restart':'Błąd: '+x.responseText);if(x.status==200)setTimeout(()=>location.reload(),9000)};
  x.onerror=()=>{$('fwUp').disabled=false;toast('Błąd wysyłania')};
  x.open('POST','/api/update');x.send(fd)};
-load().catch(()=>{});status();setInterval(status,3000);
+{const e=new URLSearchParams(location.search).get('e');if(e){history.replaceState(null,'','/');
+ setTimeout(()=>toast(e=='400'?'Kod wygasł — poproś o nowy':e=='429'?'Za dużo prób':'Zły kod'),300)}}
+showApp().catch(e=>{if($('login').hidden)$('sub').textContent='Brak połączenia z CYD'});setInterval(status,3000);
 </script></body></html>)HTML";
 
-static void sendJson(JsonDocument& d, int code = 200) {
+// ---- Logowanie: kod z ekranu CYD → token w cookie
+static void sendJson(JsonDocument& d, int code = 200);
+const uint8_t TOK_MAX = 4;
+String tokens[TOK_MAX];                // zapamiętane przeglądarki (najnowsza pierwsza)
+uint32_t loginCode = 0;                // != 0 → kod pokazany na ekranie
+uint32_t loginUntil = 0;               // ważność kodu; zarazem blokada nowego kodu
+uint8_t  loginTries = 0;
+bool     loginShown = false;
+const uint32_t LOGIN_TTL_MS = 60000;
+const uint8_t  LOGIN_MAX_TRIES = 5;
+
+static bool loginActive(uint32_t now) { return loginCode && (int32_t)(loginUntil - now) > 0; }
+
+static void loadTokens() {
+  String s = prefs.getString("toks", "");
+  for (uint8_t i = 0; i < TOK_MAX && s.length(); i++) {
+    int c = s.indexOf(',');
+    tokens[i] = c < 0 ? s : s.substring(0, c);
+    s = c < 0 ? String() : s.substring(c + 1);
+  }
+}
+
+static void saveTokens() {
+  String s;
+  for (auto& t : tokens) if (t.length()) { if (s.length()) s += ','; s += t; }
+  prefs.putString("toks", s);
+}
+
+static String cookieToken() {
+  String c = web.header("Cookie");
+  int i = c.indexOf("cydtok=");
+  if (i < 0) return "";
+  i += 7;
+  int e = c.indexOf(';', i);
+  return c.substring(i, e < 0 ? c.length() : e);
+}
+
+// Porównanie bez wczesnego wyjścia (czas nie zdradza, ile znaków się zgadza).
+static bool tokEq(const String& a, const String& b) {
+  if (a.length() != b.length()) return false;
+  uint8_t d = 0;
+  for (size_t i = 0; i < a.length(); i++) d |= a[i] ^ b[i];
+  return d == 0;
+}
+
+static int tokenIndex(const String& t) {
+  if (t.length() != 32) return -1;
+  for (int i = 0; i < TOK_MAX; i++) if (tokEq(tokens[i], t)) return i;
+  return -1;
+}
+
+static bool authed() { return tokenIndex(cookieToken()) >= 0; }
+
+static bool requireAuth() {
+  if (authed()) return true;
+  web.send(401, "text/plain", "zaloguj sie");
+  return false;
+}
+
+// Nowy kod na ekranie. Z sieci: najwyżej raz na okno 60 s (spalony kod blokuje do końca okna);
+// gest na ekranie (physical) — zawsze, bo kto dotyka CYD, ten i tak widzi kod.
+static bool startLogin(bool physical) {
+  uint32_t now = millis();
+  if (loginActive(now) && !physical) return true;          // ten sam kod
+  if (!physical && (int32_t)(loginUntil - now) > 0) return false;
+  loginCode = 100000 + esp_random() % 900000;
+  loginUntil = now + LOGIN_TTL_MS;
+  loginTries = 0;
+  loginShown = false;
+  Serial.printf("[web] kod logowania na ekranie (%s)\n", physical ? "gest" : "przegladarka");
+  return true;
+}
+
+static void handleLoginStart() {
+  if (!startLogin(false)) { web.send(429, "text/plain", "za duzo prob - sprobuj za chwile"); return; }
+  JsonDocument d;
+  d["ttl"] = (loginUntil - millis()) / 1000;
+  sendJson(d);
+}
+
+// Sprawdza kod; przy sukcesie dopisuje token i ustawia cookie. Zwraca kod HTTP (200 = OK).
+static int checkCode(const char* code, const char** err) {
+  uint32_t now = millis();
+  if (!loginActive(now)) { *err = "kod wygasl - popros o nowy"; return 400; }
+  if (!code || strlen(code) != 6 || strtoul(code, nullptr, 10) != loginCode) {
+    if (++loginTries >= LOGIN_MAX_TRIES) {
+      loginCode = 0;                         // ekran gaśnie, nowy kod z sieci dopiero po loginUntil
+      *err = "za duzo prob - kod uniewazniony";
+      return 429;
+    }
+    *err = "zly kod";
+    return 403;
+  }
+  char t[33];
+  for (int i = 0; i < 4; i++) snprintf(t + i * 8, 9, "%08lx", (unsigned long)esp_random());
+  for (int i = TOK_MAX - 1; i > 0; i--) tokens[i] = tokens[i - 1];   // najstarszy wypada
+  tokens[0] = t;
+  saveTokens();
+  loginCode = 0;
+  loginUntil = now;                        // od razu można poprosić o kolejny kod
+  Serial.println("[web] zalogowano przegladarke");
+  web.sendHeader("Set-Cookie", String("cydtok=") + t + "; Max-Age=31536000; Path=/; HttpOnly; SameSite=Lax");
+  *err = "ok";
+  return 200;
+}
+
+static void handleLogin() {
+  JsonDocument d;
+  String body = web.arg("plain");
+  if (deserializeJson(d, body) || !d["code"].is<const char*>()) { web.send(400, "text/plain", "brak kodu"); return; }
+  const char* err;
+  int code = checkCode(d["code"], &err);
+  web.send(code, "text/plain", err);
+}
+
+// Link z kodu QR: loguje i przekierowuje na panel (przy błędzie panel pokaże logowanie + powód).
+static void handleLoginLink() {
+  const char* err;
+  String c = web.arg("c");
+  int code = checkCode(c.c_str(), &err);
+  web.sendHeader("Location", code == 200 ? "/" : String("/?e=") + code);
+  web.send(302, "text/plain", err);
+}
+
+static void handleLogout() {
+  if (!requireAuth()) return;
+  JsonDocument d;
+  String body = web.arg("plain");
+  deserializeJson(d, body);
+  if (d["all"] | false) for (auto& t : tokens) t = "";
+  else tokens[tokenIndex(cookieToken())] = "";
+  saveTokens();
+  web.sendHeader("Set-Cookie", "cydtok=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax");
+  web.send(200, "text/plain", "ok");
+}
+
+// Ekran logowania na CYD: QR (link z kodem) po lewej, 6 cyfr po prawej, pasek ważności.
+// true = zajmuje ekran (dashboard wtedy nie rysuje). Dotknięcie ekranu anuluje kod.
+bool loginTick(uint32_t now) {
+  static int lastSec = -1;
+  if (!loginActive(now)) {
+    if (loginShown) { loginShown = false; loginCode = 0; tLastDraw = 0; }
+    return false;
+  }
+  setBacklight(BRI_LEVELS[briIdx]);         // też w nocy
+  const int QX = 8, QY = 30, QS = 176;      // biały kwadrat z kodem QR
+  const int RX = QX + QS + 8, RW = W - RX - 8, RC = RX + RW / 2;   // prawa kolumna
+  if (!loginShown) {
+    loginShown = true;
+    lastSec = -1;
+    lcd.fillScreen(ui::BG);
+    lcd.setTextDatum(lgfx::middle_center);
+    lcd.setFont(&fonts::Font2);
+    lcd.setTextColor(ui::DIM);
+    lcd.drawString("Logowanie do panelu WWW", W / 2, 14);
+    char url[64];
+    snprintf(url, sizeof(url), "http://%s/login?c=%06lu", WiFi.localIP().toString().c_str(),
+             (unsigned long)loginCode);
+    lcd.fillRoundRect(QX, QY, QS, QS, 8, TFT_WHITE);
+    lcd.qrcode(url, QX + 14, QY + 14, QS - 28, 1, false);   // ~3 moduły marginesu z białej ramki
+    char a[4], b[4];
+    snprintf(a, sizeof(a), "%03lu", (unsigned long)(loginCode / 1000));
+    snprintf(b, sizeof(b), "%03lu", (unsigned long)(loginCode % 1000));
+    lcd.setFont(&fonts::Font7);
+    lcd.setTextColor(ui::TEXT);
+    lcd.drawString(a, RC, 70);
+    lcd.drawString(b, RC, 128);
+    lcd.setFont(&fonts::Font2);
+    lcd.setTextColor(ui::DIM);
+    lcd.drawString("Zeskanuj telefonem", W / 2, 218 - 2);
+    lcd.drawString("lub wpisz kod  -  dotknij = anuluj", W / 2, 232);
+    lcd.setTextDatum(lgfx::top_left);
+  }
+  int sec = ((loginUntil - now) + 999) / 1000;
+  if (sec != lastSec) {
+    lastSec = sec;
+    uiBar(lcd, RX, 166, RW, 10, sec / 60.0f, ui::BLUE);
+    char t[8];
+    snprintf(t, sizeof(t), "%d s", sec);
+    lcd.fillRect(RX, 180, RW, 20, ui::BG);
+    lcd.setFont(&fonts::Font2);
+    lcd.setTextColor(ui::DIM);
+    lcd.setTextDatum(lgfx::middle_center);
+    lcd.drawString(t, RC, 190);
+    lcd.setTextDatum(lgfx::top_left);
+  }
+  int x, y;
+  if (touchXY(lcd, tcal, &x, &y)) {
+    waitRelease(lcd, tcal);
+    loginCode = 0;                           // blokada nowego kodu z sieci zostaje do loginUntil
+    Serial.println("[web] kod anulowany dotykiem");
+  }
+  return true;
+}
+
+static void sendJson(JsonDocument& d, int code) {
   String out;
   serializeJson(d, out);
   web.send(code, "application/json", out);
@@ -203,6 +441,7 @@ static bool parseBody(JsonDocument& d) {
 }
 
 static void handleStatus() {
+  if (!requireAuth()) return;
   uint32_t now = millis();
   JsonDocument d;
   d["fw"] = FW_VERSION;
@@ -224,6 +463,7 @@ static void handleStatus() {
 }
 
 static void handleGetSettings() {
+  if (!requireAuth()) return;
   JsonDocument d;
   d["bri"] = briIdx;
   d["rot180"] = tcal.flip;
@@ -237,6 +477,7 @@ static void handleGetSettings() {
 }
 
 static void handlePostSettings() {
+  if (!requireAuth()) return;
   JsonDocument d;
   if (!parseBody(d)) return;
 
@@ -268,6 +509,7 @@ static void handlePostSettings() {
 }
 
 static void handleScan() {
+  if (!requireAuth()) return;
   int n = WiFi.scanNetworks(false, false);
   JsonDocument d;
   JsonArray a = d.to<JsonArray>();
@@ -288,6 +530,7 @@ static void handleScan() {
 }
 
 static void handleWifi() {
+  if (!requireAuth()) return;
   JsonDocument d;
   if (!parseBody(d)) return;
   String ssid = d["ssid"] | "";
@@ -305,11 +548,13 @@ static void handleWifi() {
 }
 
 static void handleRestart() {
+  if (!requireAuth()) return;
   web.send(200, "text/plain", "ok");
   restartAt = millis() + 500;
 }
 
 static void handleCalibrate() {
+  if (!requireAuth()) return;
   prefs.putBool("calv", false);
   Serial.println("[web] kalibracja skasowana — restart");
   web.send(200, "text/plain", "ok");
@@ -345,12 +590,14 @@ static void otaScreen(int pct, const char* msg) {
 static void handleUpdateUpload() {
   HTTPUpload& u = web.upload();
   if (u.status == UPLOAD_FILE_START) {
-    Serial.printf("[ota] start: %s\n", u.filename.c_str());
     otaOk = false;
     otaErr = nullptr;
+    if (!authed()) { otaErr = "zaloguj sie"; return; }   // nic nie zapisujemy bez tokenu
+    Serial.printf("[ota] start: %s\n", u.filename.c_str());
     otaScreen(-1, nullptr);
     if (!Update.begin(UPDATE_SIZE_UNKNOWN, U_FLASH)) Update.printError(Serial);
   } else if (u.status == UPLOAD_FILE_WRITE) {
+    if (otaErr) return;
     // obraz aplikacji ESP32 zaczyna się bajtem 0xE9; -full.bin (od 0x0) ma tam 0xFF
     if (u.totalSize == 0 && u.currentSize > 0 && u.buf[0] != 0xE9) {
       otaErr = "to nie jest plik aplikacji - uzyj gpu_cyd-<v>-update.bin (nie -full.bin)";
@@ -362,11 +609,13 @@ static void handleUpdateUpload() {
     size_t total = u.totalSize + u.currentSize;
     otaScreen(min(99, (int)(total * 100 / 1310720)), nullptr);
   } else if (u.status == UPLOAD_FILE_END) {
-    otaOk = !otaErr && Update.end(true);
+    if (otaErr) return;
+    otaOk = Update.end(true);
     if (!otaOk) Update.printError(Serial);
     Serial.printf("[ota] koniec: %u B, ok=%d\n", (unsigned)u.totalSize, (int)otaOk);
     otaScreen(100, otaOk ? "OK - restart" : "Blad aktualizacji");
   } else if (u.status == UPLOAD_FILE_ABORTED) {
+    if (otaErr) return;
     Update.abort();
     otaOk = false;
     otaScreen(0, "Przerwano");
@@ -374,6 +623,7 @@ static void handleUpdateUpload() {
 }
 
 static void handleUpdateDone() {
+  if (!authed()) { web.send(401, "text/plain", "zaloguj sie"); return; }
   if (otaOk) {
     web.send(200, "text/plain", "ok");
     restartAt = millis() + 1000;
@@ -400,6 +650,13 @@ void webBegin() {
   web.on("/api/restart", HTTP_POST, handleRestart);
   web.on("/api/calibrate", HTTP_POST, handleCalibrate);
   web.on("/api/update", HTTP_POST, handleUpdateDone, handleUpdateUpload);
+  web.on("/api/login/start", HTTP_POST, handleLoginStart);
+  web.on("/api/login", HTTP_POST, handleLogin);
+  web.on("/api/logout", HTTP_POST, handleLogout);
+  web.on("/login", HTTP_GET, handleLoginLink);
+  const char* hdrs[] = {"Cookie"};
+  web.collectHeaders(hdrs, 1);
+  loadTokens();
   web.onNotFound([] { web.send(404, "text/plain", "nie ma"); });
   web.begin();
   Serial.printf("[web] http://%s.local  http://%s\n", WEB_HOSTNAME, WiFi.localIP().toString().c_str());

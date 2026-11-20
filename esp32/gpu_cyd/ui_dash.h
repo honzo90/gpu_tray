@@ -70,6 +70,8 @@ public:
   }
 
   // Czy dotknięto ⚙ (prawy górny róg) → konfiguracja Wi-Fi.
+  // nazwa hosta w nagłówku (lewa część) — ukryty gest: przytrzymanie → logowanie WWW
+  bool hitHost(int x, int y) const { return x < W - 90 && y <= 24; }
   bool hitGear(int x, int y) const { return x >= W - 26 && y <= 24; }
   // Czy dotknięto ↻ (obok ⚙) → obrót ekranu o 180°.
   bool hitRotate(int x, int y) const { return x >= W - 54 && x < W - 26 && y <= 24; }
