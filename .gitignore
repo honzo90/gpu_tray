@@ -1,0 +1,9 @@
+# Artefakty SwiftPM / pakowania aplikacji
+.build/
+build/
+.swiftpm/
+*.xcodeproj/
+xcuserdata/
+
+# macOS
+.DS_Store
