@@ -12,10 +12,17 @@ struct TouchCal {
   bool xFromY = false;         // ekranowa oś X pochodzi z raw Y (swap dla części płytek)
   bool yFromX = false;
   bool valid = false;
-  // Ekran obrócony o 180° (setRotation 3 zamiast 1). Kalibracja jest zawsze zapisana
-  // dla orientacji bazowej — przy flip tylko odbijamy wynik (x → 319-x, y → 239-y).
-  bool flip = false;
+  // Obrót w ćwierćobrotach względem orientacji bazowej (setRotation 1): 0 = 0°, 1 = 90°,
+  // 2 = 180°, 3 = 270°. Kalibracja jest zawsze zapisana dla orientacji bazowej — wynik
+  // tylko przeliczamy (jak Panel_Device::convertRawXY w LovyanGFX).
+  uint8_t rot = 0;
 };
+
+// setRotation LovyanGFX dla ćwierćobrotu q (bazowa = 1, obroty idą 1 → 2 → 3 → 0).
+inline uint8_t lcdRotFor(uint8_t q) {
+  static const uint8_t R[4] = {1, 2, 3, 0};
+  return R[q & 3];
+}
 
 inline int32_t calMap(int32_t v, int32_t a, int32_t b, int32_t s1, int32_t s2) {
   int32_t span = b - a;
@@ -32,7 +39,12 @@ inline bool touchXY(LGFX& lcd, const TouchCal& c, int* ox, int* oy) {
   int32_t y = calMap(rawY, c.sy1, c.sy2, 24, 216);
   x = x < 0 ? 0 : (x > 319 ? 319 : x);
   y = y < 0 ? 0 : (y > 239 ? 239 : y);
-  if (c.flip) { x = 319 - x; y = 239 - y; }
+  int32_t bx = x, by = y;                         // współrzędne w orientacji bazowej 320x240
+  switch (c.rot & 3) {
+    case 1: x = by;        y = 319 - bx; break;   // rotation 2: pion 240x320
+    case 2: x = 319 - bx;  y = 239 - by; break;   // rotation 3: poziom odwrócony
+    case 3: x = 239 - by;  y = bx;       break;   // rotation 0: pion odwrócony
+  }
   if (ox) *ox = x;
   if (oy) *oy = y;
   return true;
@@ -48,7 +60,7 @@ inline void waitRelease(LGFX& lcd, const TouchCal& c) {
 }
 
 // ---- Kalibracja: 4 cele (osie rozdzielone, wykrywa też zamienione osie X/Y)
-// Zawsze w orientacji bazowej (rotation 1, bez flip) — patrz runCalibration niżej.
+// Zawsze w orientacji bazowej (rotation 1, rot = 0) — patrz runCalibration niżej.
 inline bool runCalibrationBase(LGFX& lcd, Preferences& prefs, TouchCal& cal) {
   struct Target { int x, y; const char* tag; };
   const Target t[4] = {
@@ -134,12 +146,12 @@ inline bool runCalibrationBase(LGFX& lcd, Preferences& prefs, TouchCal& cal) {
 
 // Kalibracja niezależna od obrotu: na jej czas orientacja bazowa, potem powrót.
 inline bool runCalibration(LGFX& lcd, Preferences& prefs, TouchCal& cal) {
-  bool flip = cal.flip;
-  cal.flip = false;
+  uint8_t rot = cal.rot;
+  cal.rot = 0;
   lcd.setRotation(1);
   bool r = runCalibrationBase(lcd, prefs, cal);
-  cal.flip = flip;
-  lcd.setRotation(flip ? 3 : 1);
+  cal.rot = rot;
+  lcd.setRotation(lcdRotFor(rot));
   lcd.fillScreen(ui::BG);
   return r;
 }

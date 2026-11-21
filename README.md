@@ -137,8 +137,12 @@ Wszystko zapisuje się w pamięci płytki; po restarcie CYD łączy się automat
 | Ikona | Działanie |
 |---|---|
 | ☀ | następny poziom jasności (5 poziomów: 20–180 z 255, w kółko); na chwilę pokazuje okienko z poziomem |
-| ↻ | obrót ekranu o 180° (dotyk działa bez ponownej kalibracji) |
+| ↻ | obrót ekranu o kolejne 90° (0° → 90° → 180° → 270°); 90° i 270° to dashboard w pionie (240×320). Dotyk działa bez ponownej kalibracji |
 | ⚙ | konfiguracja Wi-Fi (lista sieci; `X` zamyka bez zmian) |
+
+W pionie (90°/270°) dashboard ma układ: wskaźnik GPU z kafelkami CPU/RAM obok, pasek Ollama,
+historia GPU na całą szerokość, pod nią VRAM i sieć. Kalibracja, konfiguracja Wi-Fi, kod logowania
+i ekran aktualizacji zostają w poziomie (przy 90° jak 0°, przy 270° jak 180°).
 
 Jasność jest ograniczona do 180/255 celowo: CYD ma słaby stabilizator (AMS1117) i pełne
 podświetlenie razem ze skokiem prądu Wi-Fi potrafi zresetować płytkę.
@@ -169,7 +173,7 @@ Po połączeniu z Wi-Fi CYD wystawia stronę ustawień pod **http://gpu-cyd.loca
 `http://<IP CYD>` (IP widać na ekranie po połączeniu). Na stronie:
 
 - **stan**: Mac (host, IP, świeżość danych), czas z Maca, Wi-Fi + RSSI, tryb nocny, uptime,
-- **ekran**: jasność (suwak 1–5) i obrót o 180° — zmiany od razu na ekranie,
+- **ekran**: jasność (suwak 1–5) i obrót 0° / 90° / 180° / 270° — zmiany od razu na ekranie,
 - **tryb nocny**: włącz/wyłącz, godziny od–do, czas wybudzenia dotykiem (5–600 s),
 - **Wi-Fi**: skanowanie, wybór sieci, hasło (puste przy tej samej sieci = bez zmiany) → zapis i restart,
 - **firmware**: wersja i aktualizacja przez przeglądarkę (OTA) plikiem `gpu_cyd-<v>-update.bin`
@@ -207,7 +211,7 @@ curl -s -b cyd.txt http://gpu-cyd.local/api/settings -H 'Content-Type: applicati
 |---|---|
 | `ssid`, `pass` | dane Wi-Fi |
 | `sx1`, `sx2`, `sy1`, `sy2`, `xfy`, `yfx`, `calv` | kalibracja dotyku |
-| `rot180` | obrót o 180° |
+| `rot` | obrót: 0–3 (×90°); starszy `rot180` jest odczytywany, gdy `rot` brak |
 | `bri` | poziom jasności (indeks 0–4) |
 | `non`, `nfr`, `nto`, `nwk` | tryb nocny: włączony, od / do (minuty od północy), wybudzenie (s) |
 | `toks` | tokeny zalogowanych przeglądarek panelu WWW (do 4) |

@@ -4,7 +4,7 @@
 //   GET  /               strona (HTML+JS, poniżej)
 //   GET  /api/status     stan: IP, RSSI, Mac, czas, uptime, wersja
 //   GET  /api/settings   ustawienia (bez hasła Wi-Fi)
-//   POST /api/settings   JSON {bri, rot180, night:{on, from, to, wake}} — dowolny podzbiór
+//   POST /api/settings   JSON {bri, rot (0/90/180/270), night:{on, from, to, wake}} — dowolny podzbiór
 //   GET  /api/scan       lista sieci Wi-Fi
 //   POST /api/wifi       JSON {ssid, pass} → zapis + restart (pusty pass = bez zmiany przy tym samym SSID)
 //   POST /api/restart    restart
@@ -75,6 +75,7 @@ progress{width:100%;height:8px;accent-color:var(--acc)}
 #toast{position:fixed;left:50%;bottom:20px;transform:translateX(-50%);background:var(--text);color:var(--bg);
  padding:9px 16px;border-radius:20px;font-size:14px;opacity:0;transition:opacity .2s;pointer-events:none}
 #toast.on{opacity:1}
+.seg button.on{background:var(--acc);color:#fff}
 .code{font:600 28px/1 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.35em;text-align:center;width:100%;padding:12px}
 .center{text-align:center}
 </style></head><body><main>
@@ -105,8 +106,9 @@ progress{width:100%;height:8px;accent-color:var(--acc)}
 <div class="card"><h2>Ekran</h2>
  <div class="row"><label for="bri">Jasność <span class="k" id="briV"></span></label></div>
  <input type="range" id="bri" min="1" max="5" step="1">
- <div class="row" style="margin-top:8px"><label for="rot">Obrót o 180°</label>
-  <label class="sw"><input type="checkbox" id="rot"><span></span></label></div>
+ <div class="row" style="margin-top:8px"><span>Obrót</span></div>
+ <div class="seg" id="rot"><button data-r="0">0°</button><button data-r="90">90°</button><button data-r="180">180°</button><button data-r="270">270°</button></div>
+ <p class="hint">90° i 270° — dashboard w pionie. Konfiguracja Wi-Fi i kod logowania zostają w poziomie.</p>
 </div>
 
 <div class="card"><h2>Tryb nocny</h2>
@@ -157,7 +159,9 @@ const $=id=>document.getElementById(id);
 const BRI=[20,50,90,135,180];
 let saveT=null;
 function toast(t){const e=$('toast');e.textContent=t;e.classList.add('on');clearTimeout(e._t);e._t=setTimeout(()=>e.classList.remove('on'),1800)}
-let authed=false,ttlT=null;
+let authed=false,ttlT=null,rot=0;
+function setRot(r){rot=r;document.querySelectorAll('#rot button').forEach(b=>b.classList.toggle('on',+b.dataset.r==r))}
+document.querySelectorAll('#rot button').forEach(b=>b.onclick=()=>{setRot(+b.dataset.r);save()});
 async function api(p,body){const r=await fetch(p,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(body)});
  if(r.status==401&&!p.startsWith('/api/login')){showLogin();throw new Error('zaloguj się')}
  if(!r.ok)throw new Error(await r.text()||r.status);return r.headers.get('content-type')?.includes('json')?r.json():r.text()}
@@ -165,7 +169,7 @@ function hm(m){return String(Math.floor(m/60)).padStart(2,'0')+':'+String(m%60).
 function dur(s){const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60);return (d?d+' d ':'')+(d||h?h+' h ':'')+m+' min'}
 function briLabel(){$('briV').textContent=$('bri').value+'/5'}
 async function load(){const s=await api('/api/settings');
- $('bri').value=s.bri+1;briLabel();$('rot').checked=s.rot180;
+ $('bri').value=s.bri+1;briLabel();setRot(s.rot);
  $('non').checked=s.night.on;$('nfr').value=s.night.from;$('nto').value=s.night.to;$('nwk').value=s.night.wake;
  $('ssid').value=s.ssid}
 function showLogin(){authed=false;$('app').hidden=true;$('login').hidden=false;$('sub').textContent='Zaloguj się kodem z ekranu CYD'}
@@ -189,11 +193,11 @@ async function status(){if(!authed)return;try{const s=await api('/api/status');
  $('sWifi').textContent=s.ssid+' · '+s.rssi+' dBm';
  $('sNight').textContent=s.night?(s.awake?'noc (wybudzony)':'noc (wygaszony)'):'dzień';
  $('sUp').textContent=dur(s.uptime);$('sFw').textContent=s.fw}catch(e){if(authed)$('sub').textContent='Brak połączenia z CYD'}}
-function collect(){return{bri:$('bri').value-1,rot180:$('rot').checked,
+function collect(){return{bri:$('bri').value-1,rot,
  night:{on:$('non').checked,from:$('nfr').value,to:$('nto').value,wake:+$('nwk').value}}}
 function save(){clearTimeout(saveT);saveT=setTimeout(async()=>{try{await api('/api/settings',collect());toast('Zapisano');status()}catch(e){toast('Błąd: '+e.message)}},250)}
 $('bri').oninput=()=>{briLabel();save()};
-['rot','non','nfr','nto','nwk'].forEach(i=>$(i).onchange=save);
+['non','nfr','nto','nwk'].forEach(i=>$(i).onchange=save);
 $('scan').onclick=async()=>{const b=$('scan');b.disabled=true;b.textContent='...';
  try{const l=await api('/api/scan');const s=$('ssidSel');s.length=1;
   l.forEach(n=>{const o=document.createElement('option');o.value=n.ssid;o.textContent=n.ssid+'  ('+n.rssi+' dBm'+(n.open?', otwarta':'')+')';s.appendChild(o)})}
@@ -365,6 +369,7 @@ bool loginTick(uint32_t now) {
   const int QX = 8, QY = 30, QS = 176;      // biały kwadrat z kodem QR
   const int RX = QX + QS + 8, RW = W - RX - 8, RC = RX + RW / 2;   // prawa kolumna
   if (!loginShown) {
+    setOrient(false);                        // ekran kodu projektowany na 320x240
     loginShown = true;
     lastSec = -1;
     lcd.fillScreen(ui::BG);
@@ -466,7 +471,7 @@ static void handleGetSettings() {
   if (!requireAuth()) return;
   JsonDocument d;
   d["bri"] = briIdx;
-  d["rot180"] = tcal.flip;
+  d["rot"] = rotQ * 90;
   d["ssid"] = cfgSSID;              // hasła nie zwracamy
   JsonObject n = d["night"].to<JsonObject>();
   n["on"] = nightOn;
@@ -489,10 +494,15 @@ static void handlePostSettings() {
       tLastDraw = 0;
     }
   }
-  if (d["rot180"].is<bool>()) {
-    bool f = d["rot180"];
-    if (f != tcal.flip) { applyFlip(f, true); tLastDraw = 0; }
+  int q = -1;
+  if (d["rot"].is<int>()) {
+    int r = d["rot"];
+    if (r % 90) { web.send(400, "text/plain", "rot: 0, 90, 180 lub 270"); return; }
+    q = ((r / 90) % 4 + 4) % 4;
+  } else if (d["rot180"].is<bool>()) {       // zgodność z API v1.1
+    q = d["rot180"] ? 2 : 0;
   }
+  if (q >= 0 && q != rotQ) applyRot(q, true);
   JsonObject n = d["night"];
   if (!n.isNull()) {
     if (n["from"].is<const char*>() || n["to"].is<const char*>()) {
@@ -567,6 +577,7 @@ static void otaScreen(int pct, const char* msg) {
   if (pct == last && !msg) return;
   last = pct;
   if (pct < 0) {
+    setOrient(false);
     setBacklight(BRI_LEVELS[briIdx]);
     lcd.fillScreen(ui::BG);
     lcd.setFont(&fonts::Font4);

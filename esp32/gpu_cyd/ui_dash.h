@@ -37,11 +37,25 @@ public:
     _lcd = &lcd;
     _canvas = new lgfx::LGFX_Sprite(&lcd);
     _canvas->setColorDepth(8);          // 320x240@8bpp = 77 KB — bez migotania
-    if (_canvas->createSprite(W, H) == nullptr) {
+    if (_canvas->createSprite(_w, _h) == nullptr) {
       delete _canvas;
       _canvas = nullptr;                // rzadkie braki pamięci → rysuj wprost na LCD
     }
   }
+
+  // Układ pionowy 240x320 (obrót 90°/270°) albo poziomy 320x240. Sprite ma tyle samo bajtów,
+  // ale inne wymiary — tworzymy go od nowa (zwolnienie + alokacja tego samego rozmiaru).
+  void setPortrait(bool p) {
+    if (p == _portrait) return;
+    _portrait = p;
+    _w = p ? H : W;
+    _h = p ? W : H;
+    if (_canvas) {
+      _canvas->deleteSprite();
+      if (_canvas->createSprite(_w, _h) == nullptr) { delete _canvas; _canvas = nullptr; }
+    }
+  }
+  int width() const { return _w; }
 
   // Parsuje jeden pakiet JSON ("{...}").
   void parse(const char* json, uint32_t nowMs) {
@@ -71,12 +85,12 @@ public:
 
   // Czy dotknięto ⚙ (prawy górny róg) → konfiguracja Wi-Fi.
   // nazwa hosta w nagłówku (lewa część) — ukryty gest: przytrzymanie → logowanie WWW
-  bool hitHost(int x, int y) const { return x < W - 90 && y <= 24; }
-  bool hitGear(int x, int y) const { return x >= W - 26 && y <= 24; }
-  // Czy dotknięto ↻ (obok ⚙) → obrót ekranu o 180°.
-  bool hitRotate(int x, int y) const { return x >= W - 54 && x < W - 26 && y <= 24; }
+  bool hitHost(int x, int y) const { return x < _w - 90 && y <= 24; }
+  bool hitGear(int x, int y) const { return x >= _w - 26 && y <= 24; }
+  // Czy dotknięto ↻ (obok ⚙) → obrót ekranu o kolejne 90°.
+  bool hitRotate(int x, int y) const { return x >= _w - 54 && x < _w - 26 && y <= 24; }
   // Czy dotknięto ☀ (obok ↻) → następny poziom jasności.
-  bool hitBright(int x, int y) const { return x >= W - 82 && x < W - 54 && y <= 24; }
+  bool hitBright(int x, int y) const { return x >= _w - 82 && x < _w - 54 && y <= 24; }
 
   // Pokazuje na ~1.5 s okienko z poziomem jasności (level 0..levels-1).
   void showBrightness(int level, int levels, uint32_t now) {
@@ -86,12 +100,12 @@ public:
   }
 
   // Zrzut ekranu przez Serial: nagłówek "[shot] W H 8\n", potem W*H bajtów RGB332
-  // (bufor sprite'a, orientacja logiczna — niezależnie od obrotu 180°). Odbiór: esp32/cyd_screenshot.py
+  // (bufor sprite'a, orientacja logiczna — W/H zamienione w układzie pionowym). Odbiór: esp32/cyd_screenshot.py
   void dumpScreen(uint32_t nowMs) {
     if (!_canvas) { Serial.println("[shot] brak sprite (rysowanie wprost na LCD)"); return; }
     drawAll(*_canvas, nowMs);                       // świeża klatka
-    Serial.printf("[shot] %d %d 8\n", W, H);
-    Serial.write((const uint8_t*)_canvas->getBuffer(), W * H);
+    Serial.printf("[shot] %d %d 8\n", _w, _h);
+    Serial.write((const uint8_t*)_canvas->getBuffer(), _w * _h);
     Serial.flush();
     Serial.println();
     Serial.println("[shot] koniec");
@@ -107,6 +121,8 @@ public:
 
 private:
   int _briLevel = 0, _briLevels = 1;
+  bool _portrait = false;
+  int _w = W, _h = H;
   uint32_t _toastUntil = 0;
 
   LGFX* _lcd = nullptr;
@@ -128,18 +144,36 @@ private:
   //   26..120  [wskaźnik GPU 104px] [historia GPU 60 s 200px]
   //   124..146 pasek Ollama
   //   150..236 kafelki 2x2: CPU | RAM / VRAM | SIEC
+  // Układ pionowy 240x320 (szerokość wewnętrzna 228):
+  //   0..22    nagłówek
+  //   26..120  [wskaźnik GPU 104px] [CPU / RAM 120px]
+  //   124..146 pasek Ollama
+  //   150..226 historia GPU 60 s
+  //   230..271 VRAM,  275..316 SIEC
 
   void drawAll(lgfx::LGFXBase& g, uint32_t now) {
     g.fillScreen(ui::BG);
     bool fresh = st.everRx && now - st.rxMs < 5000;
     drawHeader(g, fresh);
+    float memF = st.memT > 0 && st.mem >= 0 ? st.mem / st.memT : -1;
+    float vF   = st.memT > 0 && st.vgpu >= 0 ? st.vgpu / st.memT : -1;
+    if (_portrait) {
+      const int wi = _w - 2 * MARG, cx = MARG + 108, cw = wi - 108;
+      drawGauge(g, MARG, 26, 104, 94);
+      tile(g, cx, 26, cw, 45, "CPU", fmtPct(st.cpu), "", st.cpu >= 0 ? st.cpu / 100.0f : -1);
+      tile(g, cx, 75, cw, 45, "RAM", fmtNum(st.mem), fmtTot(st.memT), memF);
+      drawOllama(g, now, fresh, MARG, 124, wi, 22);
+      drawHistory(g, MARG, 150, wi, 76);
+      tile(g, MARG, 230, wi, 41, "VRAM", fmtNum(st.vgpu), fmtTot(st.memT), vF);
+      netTile(g, MARG, 275, wi, 41);
+      if ((int32_t)(_toastUntil - now) > 0) drawBrightToast(g);
+      return;
+    }
     drawGauge(g, MARG, 26, 104, 94);
     drawHistory(g, MARG + 108, 26, 200, 94);
     drawOllama(g, now, fresh, MARG, 124, W_IN, 22);
 
     const int tw = 152, th = 41, x2 = MARG + tw + 4;
-    float memF = st.memT > 0 && st.mem >= 0 ? st.mem / st.memT : -1;
-    float vF   = st.memT > 0 && st.vgpu >= 0 ? st.vgpu / st.memT : -1;
     tile(g, MARG, 150, tw, th, "CPU",  fmtPct(st.cpu), "", st.cpu >= 0 ? st.cpu / 100.0f : -1);
     tile(g, x2,   150, tw, th, "RAM",  fmtNum(st.mem), fmtTot(st.memT), memF);
     tile(g, MARG, 195, tw, th, "VRAM", fmtNum(st.vgpu), fmtTot(st.memT), vF);
@@ -150,7 +184,7 @@ private:
 
   // ── okienko „Jasnosc" z segmentami poziomu (na wierzchu)
   void drawBrightToast(lgfx::LGFXBase& g) {
-    const int w = 168, h = 58, x = (W - w) / 2, y = 92;
+    const int w = 168, h = 58, x = (_w - w) / 2, y = (_h - h) / 2 - 1;
     g.fillRoundRect(x - 2, y - 2, w + 4, h + 4, 9, ui::BG);    // obwódka odcina od tła
     g.fillRoundRect(x, y, w, h, 8, ui::PANEL2);
     drawSunIcon(g, x + 18, y + 18, ui::TEXT);
@@ -186,7 +220,7 @@ private:
     g.fillCircle(MARG + 4, cy, 3, fresh ? ui::GREEN : (st.everRx ? ui::RED : ui::DIM));
     g.setFont(&fonts::DejaVu12);
     // zegar przy ikonach, host przycięty do miejsca, które zostaje
-    const int timeRight = W - 86;
+    const int timeRight = _w - 86;
     g.setTextColor(ui::DIM);
     g.setTextDatum(lgfx::middle_right);
     g.drawString(st.time, timeRight, cy);
@@ -195,11 +229,11 @@ private:
     g.setTextDatum(lgfx::middle_left);
     g.drawString(fitText(g, st.host[0] ? st.host : "gpu-tray", hostMax), MARG + 13, cy);
 
-    drawSunIcon(g, W - 68, cy, ui::DIM);
-    drawRotateIcon(g, W - 40, cy);
+    drawSunIcon(g, _w - 68, cy, ui::DIM);
+    drawRotateIcon(g, _w - 40, cy);
 
     // ⚙ (pierścień + zęby)
-    int cx = W - 14, r = 7;
+    int cx = _w - 14, r = 7;
     g.drawCircle(cx, cy, r, ui::DIM);
     g.drawCircle(cx, cy, 2, ui::DIM);
     for (int i = 0; i < 4; i++) {
@@ -390,6 +424,13 @@ private:
 
     int rx = x + w - 8;
     g.setTextDatum(lgfx::middle_right);
+    if (sub[0]) {                       // „/ suma" tylko gdy zmieści się obok etykiety i wartości
+      int need = g.textWidth(label) + 10;
+      g.setFont(&fonts::DejaVu18);
+      need += g.textWidth(value) + 3;
+      g.setFont(&fonts::DejaVu9);
+      if (need + g.textWidth(sub) > w - 16) sub = "";
+    }
     if (sub[0]) {
       g.setFont(&fonts::DejaVu9);
       g.drawString(sub, rx, cy + 2);

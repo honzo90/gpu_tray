@@ -14,7 +14,7 @@
 #include "ui_dash.h"
 #include "ui_wifi.h"
 
-#define FW_VERSION   "1.1.0"
+#define FW_VERSION   "1.2.0"
 #define WEB_HOSTNAME "gpu-cyd"
 
 LGFX lcd;
@@ -24,6 +24,7 @@ WiFiUDP udp;
 TouchCal tcal;
 
 String cfgSSID, cfgPass;
+String retrySSID;   // niepuste → konfiguracja otwiera od razu klawiaturę tej sieci (po złym haśle)
 
 enum class Stage { Calibrate, Setup, Connect, Dash };
 Stage stage;
@@ -98,12 +99,28 @@ bool isNight(uint32_t now) {
 
 bool nightAwake(uint32_t now) { return (int32_t)(wakeUntil - now) > 0; }
 
-// Obrót o 180°: rotation 3 zamiast 1 + odbicie dotyku (TouchCal::flip); zapis w NVS.
-void applyFlip(bool flip, bool save) {
-  tcal.flip = flip;
-  lcd.setRotation(flip ? 3 : 1);
-  if (save) prefs.putBool("rot180", flip);
-  Serial.printf("[ekran] obrot 180 = %d\n", (int)flip);
+// Obrót ekranu o 0/90/180/270° (ćwierćobroty, NVS "rot"). 90° i 270° = układ pionowy 240x320
+// tylko dla dashboardu — kalibracja, konfiguracja Wi-Fi, łączenie, kod logowania i OTA są
+// projektowane na 320x240, więc pokazujemy je w najbliższej orientacji poziomej (90°→0°, 270°→180°).
+uint8_t rotQ = 0;
+int8_t  curQ = -1;                           // orientacja ustawiona teraz na LCD (-1 = żadna)
+
+void setOrient(bool dashView) {
+  uint8_t q = dashView ? rotQ : (rotQ & 1 ? rotQ - 1 : rotQ);
+  if (q == curQ) return;
+  curQ = q;
+  tcal.rot = q;
+  lcd.setRotation(lcdRotFor(q));
+  if (dashView) dash.setPortrait(q & 1);
+  tLastDraw = 0;                             // przerysuj od razu w nowej orientacji
+}
+
+void applyRot(uint8_t q, bool save) {
+  rotQ = q & 3;
+  if (save) prefs.putUChar("rot", rotQ);
+  curQ = -1;
+  setOrient(stage == Stage::Dash);
+  Serial.printf("[ekran] obrot %d\n", rotQ * 90);
 }
 
 #include "web.h"   // panel WWW — używa globali i funkcji powyżej
@@ -125,7 +142,8 @@ void setup() {
   }
   cfgSSID = prefs.getString("ssid", "");
   cfgPass = prefs.getString("pass", "");
-  applyFlip(prefs.getBool("rot180", false), false);
+  // "rot" (0..3) od v1.2; starsze wersje miały tylko "rot180"
+  rotQ = prefs.isKey("rot") ? prefs.getUChar("rot", 0) & 3 : (prefs.getBool("rot180", false) ? 2 : 0);
   nightOn    = prefs.getBool("non", true);
   nightFrom  = prefs.getUShort("nfr", 22 * 60) % 1440;
   nightTo    = prefs.getUShort("nto", 7 * 60) % 1440;
@@ -146,6 +164,7 @@ void setup() {
   // IPv6 (link-local) → mDNS odpowiada też na AAAA; bez tego macOS czeka ~5 s na
   // timeout zapytania AAAA przy każdym otwarciu http://gpu-cyd.local
   WiFi.enableIPv6();
+  setOrient(false);
   Serial.printf("[boot] fw=%s stage=%d kalibracja=%d ssid='%s'\n", FW_VERSION, (int)stage, (int)tcal.valid, cfgSSID.c_str());
 }
 
@@ -231,6 +250,7 @@ void dashboardLoop() {
 
   // kod logowania do panelu WWW zajmuje ekran (dane z Maca wyżej nadal odbieramy)
   if (loginTick(now)) { delay(10); return; }
+  setOrient(true);                           // dashboard w wybranej orientacji (też pionowej)
 
   // 'S' na porcie szeregowym → zrzut ekranu (esp32/cyd_screenshot.py)
   while (Serial.available()) {
@@ -269,8 +289,7 @@ void dashboardLoop() {
     }
     if (dash.hitRotate(x, y)) {
       waitRelease(lcd, tcal);
-      applyFlip(!tcal.flip, true);
-      tLastDraw = 0;               // przerysuj od razu w nowej orientacji
+      applyRot(rotQ + 1, true);    // ↻: kolejne 90° (0 → 90 → 180 → 270 → 0)
       return;
     }
     if (dash.hitBright(x, y)) {
@@ -299,6 +318,7 @@ void loop() {
   switch (stage) {
     case Stage::Calibrate:
       Serial.println("[etap] kalibracja dotyku");
+      setOrient(false);
       setBacklight(BRI_LEVELS[briIdx]);     // konfiguracja zawsze widoczna (też w nocy)
       runCalibration(lcd, prefs, tcal);
       stage = cfgSSID.isEmpty() ? Stage::Setup : Stage::Connect;
@@ -306,9 +326,12 @@ void loop() {
 
     case Stage::Setup: {
       Serial.println("[etap] konfiguracja Wi-Fi");
+      setOrient(false);
       setBacklight(BRI_LEVELS[briIdx]);     // konfiguracja zawsze widoczna (też w nocy)
       String ssid, pass;
-      if (runWifiSetup(lcd, tcal, prefs, cfgSSID, ssid, pass)) {
+      String open = retrySSID;     // ⚙ z dashboardu → lista sieci; po porażce → klawiatura
+      retrySSID = "";
+      if (runWifiSetup(lcd, tcal, prefs, open, ssid, pass)) {
         cfgSSID = ssid;
         cfgPass = pass;
         stage = Stage::Connect;
@@ -319,12 +342,14 @@ void loop() {
     }
 
     case Stage::Connect:
+      setOrient(false);
       if (connectFlow()) {
         stage = Stage::Dash;
       } else {
         showConnectFail(lcd, cfgSSID);
         delay(1800);
-        // wracamy prosto do klawiatury tej sieci (openSSID=cfgSSID), by poprawić hasło
+        // wracamy prosto do klawiatury tej sieci, by poprawić hasło
+        retrySSID = cfgSSID;
         stage = Stage::Setup;
       }
       break;
