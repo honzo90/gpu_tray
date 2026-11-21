@@ -14,8 +14,9 @@
 #include "ui_dash.h"
 #include "ui_wifi.h"
 
-#define FW_VERSION   "1.3.0"
+#define FW_VERSION   "1.4.0"
 #define WEB_HOSTNAME "gpu-cyd"
+#define OTA_REPO     "honzo90/gpu_tray"   // GitHub Releases — źródło aktualizacji z panelu
 
 LGFX lcd;
 Preferences prefs;

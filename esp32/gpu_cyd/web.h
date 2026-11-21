@@ -10,6 +10,9 @@
 //   POST /api/restart    restart
 //   POST /api/calibrate  kasuje kalibrację dotyku → restart → kalibracja na ekranie
 //   POST /api/login/start, /api/login, /api/logout {all}   logowanie (patrz niżej)
+//   GET  /api/ota/check  najnowsze wydanie z GitHub Releases (OTA_REPO) vs FW_VERSION
+//   POST /api/ota/install {force}  pobiera gpu_cyd-<v>-update.bin z wydania, sprawdza SHA-256
+//                        z SHA256SUMS.txt, instaluje i restartuje (HTTPS z wbudowanym zestawem CA)
 //   POST /api/update     upload pliku .bin (gpu_cyd-<v>-update.bin) → OTA → restart
 //
 // Logowanie kodem z ekranu: POST /api/login/start (albo ukryty gest na CYD: przytrzymanie
@@ -23,6 +26,10 @@
 #include <WebServer.h>
 #include <ESPmDNS.h>
 #include <Update.h>
+#include <HTTPClient.h>
+#include <NetworkClientSecure.h>
+#include <mbedtls/sha256.h>
+#include <esp_ota_ops.h>
 
 WebServer web(80);
 uint32_t restartAt = 0;          // != 0 → restart o tej porze (po wysłaniu odpowiedzi)
@@ -139,7 +146,13 @@ progress{width:100%;height:8px;accent-color:var(--acc)}
   <progress id="fwP" value="0" max="100" hidden></progress>
   <div class="actions"><button class="pri" id="fwUp">Wgraj aktualizację</button></div>
  </div>
- <p class="hint">Plik <code>gpu_cyd-&lt;wersja&gt;-update.bin</code> z GitHub Releases. Ustawienia zostają.</p>
+ <div class="row"><span class="k">Najnowsze wydanie</span><span class="v" id="otaV">-</span></div>
+ <div class="actions" style="margin-top:8px">
+  <button id="otaChk">Sprawdź aktualizacje</button>
+  <button class="pri" id="otaGo" hidden>Zainstaluj</button>
+ </div>
+ <p class="hint" id="otaMsg">CYD pobiera wydanie z GitHuba (HTTPS) i przed instalacją sprawdza sumę SHA-256. Ustawienia zostają.</p>
+ <p class="hint">Ręcznie: plik <code>gpu_cyd-&lt;wersja&gt;-update.bin</code> z GitHub Releases (wyżej).</p>
 </div>
 
 <div class="card"><h2>Urządzenie</h2>
@@ -218,6 +231,19 @@ $('fwUp').onclick=()=>{const f=$('fw').files[0];if(!f)return toast('Wybierz plik
  x.open('POST','/api/update');x.send(fd)};
 {const e=new URLSearchParams(location.search).get('e');if(e){history.replaceState(null,'','/');
  setTimeout(()=>toast(e=='400'?'Kod wygasł — poproś o nowy':e=='429'?'Za dużo prób':'Zły kod'),300)}}
+let otaForce=false;
+$('otaChk').onclick=async()=>{const b=$('otaChk');b.disabled=true;$('otaMsg').textContent='Sprawdzam GitHub…';
+ try{const r=await api('/api/ota/check');
+  $('otaV').textContent=r.latest+(r.newer?'  (nowsze)':'  (zainstalowane: '+r.current+')');
+  otaForce=!r.newer;$('otaGo').hidden=false;$('otaGo').textContent=r.newer?'Zainstaluj '+r.latest:'Zainstaluj ponownie';
+  $('otaGo').className=r.newer?'pri':'';
+  $('otaMsg').textContent=r.newer?'Dostępna wersja '+r.latest+' (masz '+r.current+').':'Masz najnowszą wersję.'}
+ catch(e){$('otaMsg').textContent='Błąd: '+e.message}b.disabled=false};
+$('otaGo').onclick=async()=>{const v=$('otaV').textContent.split(' ')[0];
+ if(!confirm((otaForce?'Zainstalować ponownie ':'Zainstalować ')+v+'? CYD pobierze plik z GitHuba i uruchomi się ponownie.'))return;
+ $('otaGo').disabled=$('otaChk').disabled=true;$('otaMsg').textContent='Pobieranie i instalacja… (ok. 30 s, nie wyłączaj CYD)';
+ try{await api('/api/ota/install',{force:otaForce});$('otaMsg').textContent='Zainstalowano — restart…';setTimeout(()=>location.reload(),12000)}
+ catch(e){$('otaMsg').textContent='Błąd: '+e.message;$('otaGo').disabled=$('otaChk').disabled=false}};
 showApp().catch(e=>{if($('login').hidden)$('sub').textContent='Brak połączenia z CYD'});setInterval(status,3000);
 </script></body></html>)HTML";
 
@@ -616,9 +642,11 @@ static void handleUpdateUpload() {
     }
     if (otaErr) return;
     if (Update.isRunning() && Update.write(u.buf, u.currentSize) != u.currentSize) Update.printError(Serial);
-    // rozmiar pliku nieznany z góry — postęp względem wolnej partycji OTA (~1,3 MB)
+    // rozmiar pliku nieznany z góry — postęp względem rozmiaru partycji OTA
     size_t total = u.totalSize + u.currentSize;
-    otaScreen(min(99, (int)(total * 100 / 1310720)), nullptr);
+    const esp_partition_t* next = esp_ota_get_next_update_partition(nullptr);
+    size_t cap = next ? next->size : 1966080;
+    otaScreen(min(99, (int)(total * 100 / cap)), nullptr);
   } else if (u.status == UPLOAD_FILE_END) {
     if (otaErr) return;
     otaOk = Update.end(true);
@@ -645,6 +673,167 @@ static void handleUpdateDone() {
   }
 }
 
+// ---- Aktualizacja z GitHub Releases
+String otaTag, otaBinUrl, otaSumsUrl;   // wynik ostatniego sprawdzenia
+
+static void verParse(const char* v, int out[3]) {
+  out[0] = out[1] = out[2] = 0;
+  if (*v == 'v' || *v == 'V') v++;
+  sscanf(v, "%d.%d.%d", &out[0], &out[1], &out[2]);
+}
+
+static int verCmp(const char* a, const char* b) {
+  int x[3], y[3];
+  verParse(a, x); verParse(b, y);
+  for (int i = 0; i < 3; i++) if (x[i] != y[i]) return x[i] < y[i] ? -1 : 1;
+  return 0;
+}
+
+// GET przez HTTPS z weryfikacją certyfikatu (wbudowany zestaw CA rdzenia) i przekierowaniami
+// (pliki wydań: github.com → release-assets.githubusercontent.com).
+static bool httpsBegin(HTTPClient& http, NetworkClientSecure& cli, const String& url) {
+  cli.useBuiltinCACertBundle();
+  cli.setTimeout(15000);            // ms (rdzeń 3.x: Stream::setTimeout — nie sekundy)
+  http.setFollowRedirects(HTTPC_FORCE_FOLLOW_REDIRECTS);
+  http.setUserAgent("gpu-cyd/" FW_VERSION);
+  http.setTimeout(15000);
+  http.useHTTP10(true);             // bez chunked — strumień da się parsować wprost
+  return http.begin(cli, url);
+}
+
+static void handleOtaCheck() {
+  if (!requireAuth()) return;
+  NetworkClientSecure cli;
+  HTTPClient http;
+  if (!httpsBegin(http, cli, "https://api.github.com/repos/" OTA_REPO "/releases/latest")) {
+    web.send(502, "text/plain", "nie moge polaczyc sie z GitHubem"); return;
+  }
+  http.addHeader("Accept", "application/vnd.github+json");
+  int code = http.GET();
+  if (code != 200) {
+    web.send(502, "text/plain", String("GitHub: HTTP ") + code); http.end(); return;
+  }
+  JsonDocument filter;
+  filter["tag_name"] = true;
+  filter["assets"][0]["name"] = true;
+  filter["assets"][0]["browser_download_url"] = true;
+  JsonDocument rel;
+  DeserializationError e = deserializeJson(rel, http.getStream(), DeserializationOption::Filter(filter));
+  http.end();
+  if (e) { web.send(502, "text/plain", String("GitHub: zly JSON (") + e.c_str() + ")"); return; }
+
+  otaTag = rel["tag_name"] | "";
+  String ver = otaTag.startsWith("v") ? otaTag.substring(1) : otaTag;
+  String binName = "gpu_cyd-" + ver + "-update.bin";
+  otaBinUrl = ""; otaSumsUrl = "";
+  for (JsonObject a : rel["assets"].as<JsonArray>()) {
+    String n = a["name"] | "";
+    if (n == binName) otaBinUrl = a["browser_download_url"] | "";
+    if (n == "SHA256SUMS.txt") otaSumsUrl = a["browser_download_url"] | "";
+  }
+  Serial.printf("[ota] GitHub: %s (bin %d, sumy %d)\n", otaTag.c_str(), !otaBinUrl.isEmpty(), !otaSumsUrl.isEmpty());
+
+  JsonDocument d;
+  d["current"] = FW_VERSION;
+  d["latest"] = otaTag;
+  d["newer"] = verCmp(otaTag.c_str(), FW_VERSION) > 0;
+  d["ready"] = !otaBinUrl.isEmpty() && !otaSumsUrl.isEmpty();
+  sendJson(d);
+}
+
+static void handleOtaInstall() {
+  if (!requireAuth()) return;
+  JsonDocument b;
+  String body = web.arg("plain");
+  deserializeJson(b, body);
+  bool force = b["force"] | false;
+  if (otaTag.isEmpty() || otaBinUrl.isEmpty() || otaSumsUrl.isEmpty()) {
+    web.send(400, "text/plain", "najpierw sprawdz aktualizacje"); return;
+  }
+  if (!force && verCmp(otaTag.c_str(), FW_VERSION) <= 0) {
+    web.send(400, "text/plain", "brak nowszej wersji"); return;
+  }
+
+  // 1) suma SHA-256 pliku z SHA256SUMS.txt
+  String binName = otaBinUrl.substring(otaBinUrl.lastIndexOf('/') + 1);
+  String want;
+  {
+    NetworkClientSecure cli;
+    HTTPClient http;
+    if (!httpsBegin(http, cli, otaSumsUrl) || http.GET() != 200) {
+      http.end(); web.send(502, "text/plain", "nie moge pobrac SHA256SUMS.txt"); return;
+    }
+    String sums = http.getString();
+    http.end();
+    int i = sums.indexOf(binName);
+    if (i < 66) { web.send(502, "text/plain", "brak sumy dla " + binName); return; }
+    int ls = sums.lastIndexOf('\n', i) + 1;
+    want = sums.substring(ls, ls + 64);
+    want.toLowerCase();
+  }
+
+  // 2) pobieranie pliku wprost do partycji OTA + liczenie SHA-256 po drodze
+  NetworkClientSecure cli;
+  HTTPClient http;
+  int code = httpsBegin(http, cli, otaBinUrl) ? http.GET() : -1;
+  int len = http.getSize();
+  if (code != 200 || len <= 0) {
+    http.end(); web.send(502, "text/plain", String("pobieranie: HTTP ") + code); return;
+  }
+  Serial.printf("[ota] %s: %d B, sha %s\n", binName.c_str(), len, want.c_str());
+  otaOk = false;
+  otaScreen(-1, nullptr);
+  if (!Update.begin(len, U_FLASH)) {
+    http.end(); otaScreen(0, "Brak miejsca"); restartAt = millis() + 2500;
+    web.send(500, "text/plain", Update.errorString()); return;
+  }
+  mbedtls_sha256_context sha;
+  mbedtls_sha256_init(&sha);
+  mbedtls_sha256_starts(&sha, 0);
+  NetworkClient* st = http.getStreamPtr();
+  static uint8_t buf[2048];
+  int got = 0;
+  const char* err = nullptr;
+  uint32_t lastData = millis();
+  while (got < len) {
+    size_t avail = st->available();
+    if (!avail) {
+      if (!http.connected() || millis() - lastData > 15000) { err = "przerwane pobieranie"; break; }
+      delay(2);
+      continue;
+    }
+    int n = st->readBytes(buf, min(avail, sizeof(buf)));
+    if (n <= 0) continue;
+    lastData = millis();
+    if (got == 0 && buf[0] != 0xE9) { err = "to nie jest plik aplikacji"; break; }
+    mbedtls_sha256_update(&sha, buf, n);
+    if (Update.write(buf, n) != (size_t)n) { err = Update.errorString(); break; }
+    got += n;
+    otaScreen(got * 100 / len, nullptr);
+  }
+  http.end();
+  uint8_t h[32];
+  mbedtls_sha256_finish(&sha, h);
+  mbedtls_sha256_free(&sha);
+  char hex[65];
+  for (int i = 0; i < 32; i++) sprintf(hex + i * 2, "%02x", h[i]);
+  if (!err && want != hex) err = "zla suma SHA-256";
+
+  if (err) {
+    Update.abort();
+    Serial.printf("[ota] blad: %s\n", err);
+    otaScreen(0, "Blad aktualizacji");
+    restartAt = millis() + 2500;          // czysty start (ekran OTA zostawił ślady)
+    web.send(500, "text/plain", err);
+    return;
+  }
+  otaOk = Update.end(true);
+  otaScreen(100, otaOk ? "OK - restart" : "Blad aktualizacji");
+  Serial.printf("[ota] %s zainstalowane: %d\n", otaTag.c_str(), (int)otaOk);
+  web.send(otaOk ? 200 : 500, "text/plain", otaOk ? "ok" : Update.errorString());
+  restartAt = millis() + (otaOk ? 1000 : 2500);
+}
+
 // Start po połączeniu z Wi-Fi (wywoływać po każdym connectFlow — idempotentne).
 void webBegin() {
   static bool started = false;
@@ -661,6 +850,8 @@ void webBegin() {
   web.on("/api/restart", HTTP_POST, handleRestart);
   web.on("/api/calibrate", HTTP_POST, handleCalibrate);
   web.on("/api/update", HTTP_POST, handleUpdateDone, handleUpdateUpload);
+  web.on("/api/ota/check", HTTP_GET, handleOtaCheck);
+  web.on("/api/ota/install", HTTP_POST, handleOtaInstall);
   web.on("/api/login/start", HTTP_POST, handleLoginStart);
   web.on("/api/login", HTTP_POST, handleLogin);
   web.on("/api/logout", HTTP_POST, handleLogout);

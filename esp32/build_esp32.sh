@@ -12,7 +12,9 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-FQBN="esp32:esp32:esp32"
+# Minimal SPIFFS: 2 sloty aplikacji po 1,9 MB (OTA) — firmware z HTTPS (aktualizacje z GitHuba)
+# nie mieści się w domyślnych 1,25 MB. NVS (ustawienia) zostaje pod tym samym adresem.
+FQBN="esp32:esp32:esp32:PartitionScheme=min_spiffs"
 PORT="${CYD_PORT:-$(ls /dev/cu.usbserial-* 2>/dev/null | head -1 || true)}"
 
 case "${1:-}" in

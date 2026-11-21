@@ -115,6 +115,11 @@ CYD_PORT=/dev/cu.usbserial-XXXX ./build_esp32.sh   # port ręcznie
 ```
 
 Pierwszy build trwa kilka minut (indeksowanie LovyanGFX), kolejne ok. 20 s.
+
+Schemat partycji: **Minimal SPIFFS** (`PartitionScheme=min_spiffs`, 2 × 1,9 MB na aplikację z OTA) —
+firmware z HTTPS nie mieści się w domyślnych 1,25 MB. **Przejście z wersji ≤ 1.3.0 na 1.4.0+ wymaga
+jednorazowego wgrania kablem**: `./build_esp32.sh` zachowuje ustawienia (NVS pod tym samym adresem),
+`-full.bin` z Releases to obraz całego flasha i kasuje ustawienia.
 Jeśli portu nie ma w `/dev/cu.usbserial-*`, najczęściej winny jest kabel tylko do ładowania
 albo luźna wtyczka micro-USB.
 
@@ -206,8 +211,11 @@ Po połączeniu z Wi-Fi CYD wystawia stronę ustawień pod **http://gpu-cyd.loca
 - **ekran**: jasność (suwak 1–5) i obrót 0° / 90° / 180° / 270° — zmiany od razu na ekranie,
 - **tryb nocny**: włącz/wyłącz, godziny od–do, czas wybudzenia dotykiem (5–600 s),
 - **Wi-Fi**: skanowanie, wybór sieci, hasło (puste przy tej samej sieci = bez zmiany) → zapis i restart,
-- **firmware**: wersja i aktualizacja przez przeglądarkę (OTA) plikiem `gpu_cyd-<v>-update.bin`
-  z [Releases](https://github.com/honzo90/gpu_tray/releases) — ustawienia zostają, kabel niepotrzebny,
+- **firmware**: wersja i aktualizacja bez kabla (OTA), ustawienia zostają:
+  - *Sprawdź aktualizacje* → CYD pyta GitHub o najnowsze [wydanie](https://github.com/honzo90/gpu_tray/releases)
+    i po kliknięciu *Zainstaluj* sam pobiera `gpu_cyd-<v>-update.bin` (HTTPS z weryfikacją certyfikatu,
+    wbudowany zestaw CA rdzenia ESP32); instaluje tylko, gdy SHA-256 zgadza się z `SHA256SUMS.txt`,
+  - albo ręcznie: wybór pliku `gpu_cyd-<v>-update.bin` z dysku,
 - **urządzenie**: restart, ponowna kalibracja dotyku, wylogowanie.
 
 #### Logowanie

@@ -64,8 +64,13 @@ jobs:
           esptool --chip esp32 --port /dev/cu.usbserial-XXXX write_flash 0x10000 gpu_cyd-$V-update.bin
           \`\`\`
 
-          Od wersji 1.1.0 aktualizację można też wgrać bez kabla: panel WWW **http://gpu-cyd.local**
-          → *Firmware* → plik \`gpu_cyd-$V-update.bin\`.
+          Bez kabla: panel WWW **http://gpu-cyd.local** → *Firmware* → *Sprawdź aktualizacje* → *Zainstaluj*
+          (od 1.4.0: CYD sam pobiera plik z tego wydania i sprawdza SHA-256) albo ręcznie plik \`gpu_cyd-$V-update.bin\`.
+
+          **Przejście z wersji ≤ 1.3.0 na 1.4.0+ — jednorazowo kablem**: od 1.4.0 firmware używa schematu
+          partycji Minimal SPIFFS (1,9 MB na aplikację), więc \`update.bin\` nie zmieści się w starym slocie.
+          Z zachowaniem ustawień: \`./build_esp32.sh\` ze źródeł (zapisuje bootloader, partycje i aplikację, NVS zostaje).
+          Albo \`gpu_cyd-$V-full.bin\` od \`0x0\` — obraz całego flasha, **kasuje ustawienia** (Wi-Fi, kalibracja).
 
           Konfiguracja po pierwszym uruchomieniu: zobacz [README](https://github.com/$GITHUB_REPOSITORY#ekran-cyd-esp32).
           EOF

@@ -59,7 +59,7 @@ jobs:
       ESP32_CORE: esp32:esp32@3.3.12
       ESP32_INDEX: https://espressif.github.io/arduino-esp32/package_esp32_index.json
       LIBS: LovyanGFX@1.2.28 ArduinoJson@7.4.3
-      FQBN: esp32:esp32:esp32
+      FQBN: esp32:esp32:esp32:PartitionScheme=min_spiffs   # jak build_esp32.sh (1,9 MB na aplikację)
     steps:
       - uses: actions/checkout@v4
 
