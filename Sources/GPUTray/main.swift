@@ -13,6 +13,11 @@ if CommandLine.arguments.contains("--screen-test") {
     exit(0)
 }
 
+// Diagnostyka drukarki Bambu Lab: `gpu-tray --bambu-dump <ip> <serial> <kod>` — surowe raporty MQTT.
+if let i = CommandLine.arguments.firstIndex(of: "--bambu-dump") {
+    BambuClient.runDump(args: Array(CommandLine.arguments.dropFirst(i + 1)))
+}
+
 // Zabezpieczenie: tylko jedna instancja aplikacji.
 if let bid = Bundle.main.infoDictionary?["CFBundleIdentifier"] as? String, !bid.isEmpty {
     let others = NSRunningApplication.runningApplications(withBundleIdentifier: bid)

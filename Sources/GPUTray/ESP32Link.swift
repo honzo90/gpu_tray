@@ -25,6 +25,11 @@ final class ESP32Link: @unchecked Sendable {
         var model: String?            // krótka nazwa modelu
         var tokPerSec: Double?        // ostatnia ukończona generacja
         var tokAge: Int?              // s od tej generacji
+        /// Drukarka Bambu Lab: nil = nieskonfigurowana (CYD pokazuje podpowiedź),
+        /// printerLinked = jest połączenie z drukarką.
+        var printer: PrinterState?
+        var printerConfigured = false
+        var printerLinked = false
     }
 
     static let port: UInt16 = 45678
@@ -151,7 +156,44 @@ final class ESP32Link: @unchecked Sendable {
         }
         put("tok", s.tokPerSec)
         if let v = s.tokAge { o["tokA"] = v }
+        if s.printerConfigured { o["p"] = printerJSON(s) }
         return try? JSONSerialization.data(withJSONObject: o)
+    }
+
+    /// Zwarty obiekt drukarki (~250 B). Teksty w ASCII — fonty CYD nie mają diakrytyków.
+    private func printerJSON(_ s: Snapshot) -> [String: Any] {
+        var p: [String: Any] = ["ok": s.printerLinked ? 1 : 0]
+        guard let st = s.printer, st.updated != .distantPast else { p["age"] = -1; return p }
+        p["age"] = Int(Date().timeIntervalSince(st.updated))
+        func put(_ k: String, _ v: Double?) {
+            guard let v, v.isFinite else { return }
+            p[k] = (v * 10).rounded() / 10
+        }
+        if let v = st.state { p["st"] = v }
+        if let v = st.percent { p["pct"] = v }
+        if let v = st.remainingMin { p["rem"] = v }
+        if let v = st.layer { p["ly"] = v }
+        if let v = st.totalLayers { p["lyT"] = v }
+        if let f = st.file { p["f"] = Self.ascii(f, max: 40) }
+        put("nz", st.nozzle); put("nzT", st.nozzleTarget)
+        put("bd", st.bed); put("bdT", st.bedTarget)
+        put("ch", st.chamber)
+        if let v = st.filamentType { p["fil"] = Self.ascii(v, max: 10) }
+        if let v = st.filamentColor { p["col"] = v }
+        if let v = st.filamentRemain { p["fr"] = v }
+        if !st.amsColors.isEmpty { p["ams"] = st.amsColors.joined(separator: ",") }
+        if let v = st.activeSlot { p["act"] = v }
+        if let v = st.error, v != 0 { p["err"] = v }
+        return p
+    }
+
+    /// „Żółta łódź.3mf" → „Zolta lodz.3mf" (transliteracja + tylko drukowalne ASCII).
+    static func ascii(_ s: String, max: Int) -> String {
+        let latin = s.applyingTransform(.toLatin, reverse: false) ?? s
+        let plain = latin.applyingTransform(.stripDiacritics, reverse: false) ?? latin
+        let mapped = plain.replacingOccurrences(of: "ł", with: "l").replacingOccurrences(of: "Ł", with: "L")
+        let out = String(String.UnicodeScalarView(mapped.unicodeScalars.filter { $0.value >= 0x20 && $0.value < 0x7F }))
+        return String(out.prefix(max))
     }
 
     private static func ntop(_ sa: sockaddr_in) -> String {

@@ -12,6 +12,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
     private let net = NetMonitor()
     private let cpu = CpuMonitor()
     private let espLink = ESP32Link()
+    private var bambu: BambuClient?          // drukarka Bambu Lab (gdy skonfigurowana)
 
     private var gpuTimer: Timer?
     private var ollamaTimer: Timer?
@@ -34,6 +35,7 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         updateTitle()
         logParser.start()
         espLink.start()
+        restartBambu()
 
         gpuTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.tickSecond() }
@@ -98,6 +100,11 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         if let stat = logParser.lastStat, Date().timeIntervalSince(stat.date) < 900 {
             s.tokPerSec = stat.tokPerSec
             s.tokAge = Int(Date().timeIntervalSince(stat.date))
+        }
+        if let b = bambu {
+            s.printerConfigured = true
+            s.printerLinked = b.link == .connected
+            s.printer = b.state
         }
         return s
     }
@@ -280,6 +287,10 @@ final class StatusBarController: NSObject, NSMenuDelegate {
         let logs = NSMenuItem(title: "📄 Pokaż logi Ollama", action: #selector(showLogsAction), keyEquivalent: "")
         logs.target = self
         menu.addItem(logs)
+        let printer = NSMenuItem(title: "🖨 Drukarka: \(bambuLabel)", action: #selector(printerSettingsAction), keyEquivalent: "")
+        printer.target = self
+        printer.toolTip = "Kliknij, aby ustawić adres, numer seryjny i kod dostępu LAN drukarki Bambu Lab"
+        menu.addItem(printer)
         addInfo("🖥 Ekran ESP32: \(espLink.peerLabel() ?? "nie pyta — wyłączony?")")
 
         menu.addItem(.separator())
@@ -341,6 +352,95 @@ final class StatusBarController: NSObject, NSMenuDelegate {
 
     @objc private func quitAction() {
         NSApp.terminate(nil)
+    }
+
+    // MARK: - Drukarka Bambu Lab
+
+    /// (Re)start klienta drukarki wg ustawień; bez pełnej konfiguracji — wyłączony.
+    private func restartBambu() {
+        bambu?.stop()
+        bambu = nil
+        guard let cfg = BambuClient.Config.fromDefaults() else { return }
+        let c = BambuClient(config: cfg)
+        c.start()
+        bambu = c
+        DebugLog.log("Bambu: start klienta (\(cfg.host))")
+    }
+
+    /// Krótki opis stanu drukarki do menu.
+    private var bambuLabel: String {
+        guard let b = bambu else { return "nieskonfigurowana — kliknij, aby ustawić" }
+        switch b.link {
+        case .off, .connecting: return "łączenie z \(b.config.host)…"
+        case .failed(let why): return "błąd — \(why)"
+        case .connected:
+            let st = b.state
+            guard st.updated != .distantPast else { return "połączono, czekam na dane…" }
+            return Self.printerSummary(st)
+        }
+    }
+
+    static func printerSummary(_ st: PrinterState) -> String {
+        switch st.state ?? "" {
+        case "RUNNING", "PREPARE":
+            var t = "drukuje \(st.percent.map { "\($0)%" } ?? "")"
+            if let r = st.remainingMin { t += " · zostało \(r / 60):\(String(format: "%02d", r % 60))" }
+            return t
+        case "PAUSE": return "pauza \(st.percent.map { "(\($0)%)" } ?? "")"
+        case "FINISH": return "zakończono"
+        case "FAILED": return "błąd druku"
+        case "IDLE": return "bezczynna"
+        default: return st.state?.lowercased() ?? "połączono"
+        }
+    }
+
+    @objc private func printerSettingsAction() {
+        let d = UserDefaults.standard
+        let alert = NSAlert()
+        alert.messageText = "Drukarka Bambu Lab"
+        alert.informativeText = "Dane z ekranu drukarki: Ustawienia → WLAN (IP i kod dostępu LAN) oraz Ustawienia → Urządzenie (numer seryjny). Kod zostaje tylko na tym Macu."
+        alert.addButton(withTitle: "Zapisz")
+        alert.addButton(withTitle: "Anuluj")
+        alert.addButton(withTitle: "Wyłącz drukarkę")
+
+        func field(_ value: String?, placeholder: String, secure: Bool = false) -> NSTextField {
+            let f: NSTextField = secure ? NSSecureTextField() : NSTextField()
+            f.stringValue = value ?? ""
+            f.placeholderString = placeholder
+            f.translatesAutoresizingMaskIntoConstraints = false
+            f.widthAnchor.constraint(equalToConstant: 240).isActive = true
+            return f
+        }
+        let host = field(d.string(forKey: "bambuHost"), placeholder: "np. 192.168.1.60")
+        let serial = field(d.string(forKey: "bambuSerial"), placeholder: "numer seryjny")
+        let code = field(d.string(forKey: "bambuAccessCode"), placeholder: "8 znaków z ekranu drukarki", secure: true)
+        let grid = NSGridView(views: [
+            [NSTextField(labelWithString: "Adres IP:"), host],
+            [NSTextField(labelWithString: "Numer seryjny:"), serial],
+            [NSTextField(labelWithString: "Kod dostępu:"), code],
+        ])
+        grid.rowSpacing = 8
+        grid.column(at: 0).xPlacement = .trailing
+        grid.frame = NSRect(x: 0, y: 0, width: 360, height: 90)
+        alert.accessoryView = grid
+        alert.window.initialFirstResponder = code.stringValue.isEmpty ? code : host
+
+        NSApp.activate(ignoringOtherApps: true)
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            let trim = { (f: NSTextField) in f.stringValue.trimmingCharacters(in: .whitespacesAndNewlines) }
+            d.set(trim(host), forKey: "bambuHost")
+            d.set(trim(serial), forKey: "bambuSerial")
+            d.set(trim(code), forKey: "bambuAccessCode")
+            DebugLog.log("Bambu: zapisano ustawienia drukarki")
+            restartBambu()
+        case .alertThirdButtonReturn:
+            d.removeObject(forKey: "bambuAccessCode")
+            DebugLog.log("Bambu: drukarka wyłączona (usunięto kod dostępu)")
+            restartBambu()
+        default:
+            break
+        }
     }
 }
 

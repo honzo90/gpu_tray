@@ -35,6 +35,25 @@ enum ScreenTest {
                 s.tokPerSec = 14.2 + 3 * wave
                 s.tokAge = 30
             }
+            // syntetyczny druk (neutralne dane do zrzutów README)
+            var pr = PrinterState()
+            pr.state = "RUNNING"
+            let pct = Int(t / 3) % 101
+            pr.percent = pct
+            pr.remainingMin = max(0, 96 - pct * 96 / 100)
+            pr.totalLayers = 240
+            pr.layer = pct * 240 / 100
+            pr.file = "benchy.3mf"
+            pr.nozzle = 219.6 + 0.6 * sin(t / 3); pr.nozzleTarget = 220
+            pr.bed = 60.2; pr.bedTarget = 60
+            pr.chamber = 31
+            pr.filamentType = "PLA"; pr.filamentColor = "FF6A13"; pr.filamentRemain = 72
+            pr.amsColors = ["FF6A13", "FFFFFF", "161616", ""]
+            pr.activeSlot = 0
+            pr.updated = Date()
+            s.printer = pr
+            s.printerConfigured = true
+            s.printerLinked = true
             link.publish(s)
         }
         timer.resume()

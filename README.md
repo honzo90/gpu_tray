@@ -62,6 +62,8 @@ podpisuje ad-hoc — wtedy po każdym buildzie macOS może pytać o zgody od now
 - lista załadowanych modeli: VRAM, % na GPU, kontekst, licznik auto-unloadu,
 - ostatnia generacja: tok/s + godzina,
 - akcje: **Zatrzymaj model** (POST `/api/generate` z `keep_alive: 0`), przełącznik autostartu, otwarcie logów Ollama,
+- „🖨 Drukarka": stan drukarki Bambu Lab (drukuje 42% · zostało 1:23 / bezczynna / błąd połączenia);
+  kliknięcie otwiera okno z adresem IP, numerem seryjnym i kodem dostępu LAN,
 - „🖥 Ekran ESP32": `podłączony (IP)` gdy CYD pyta o dane, inaczej czas od ostatniego zapytania.
 
 ## Konfiguracja (`defaults write com.gputray.app <klucz> <wartość`)
@@ -71,6 +73,9 @@ podpisuje ad-hoc — wtedy po każdym buildzie macOS może pytać o zgody od now
 | `gpuBusyThreshold` | `60` | próg % GPU uznawany za „Ollama pracuje" (np. `-float 75`) |
 | `ollamaBaseURL` | auto | wymuszony adres serwera (np. `http://192.168.1.50:11434`) |
 | `ollamaPort` | `11434` | port serwera Ollama |
+| `bambuHost` | — | IP drukarki Bambu Lab (ustawiane też z menu „🖨 Drukarka") |
+| `bambuSerial` | — | numer seryjny drukarki |
+| `bambuAccessCode` | — | kod dostępu LAN z ekranu drukarki; bez niego klient drukarki jest wyłączony |
 
 Auto-detekcja adresu serwera: `ollamaBaseURL` (jeśli ustawiony) → `127.0.0.1` → `localhost` → adresy nasłuchu z `lsof`.
 Jeśli Ollama słucha tylko na IP LAN (np. `OLLAMA_HOST=192.168.1.50`), aplikacja sama to wykrywa.
@@ -88,6 +93,7 @@ defaults delete com.gputray.app ollamaBaseURL
 /Applications/GPUTray.app/Contents/MacOS/GPUTray --once   # jeden snapshot wszystkich źródeł (też sieć i CPU)
 GPU_TRAY_DEBUG=1 /Applications/GPUTray.app/Contents/MacOS/GPUTray   # log do ~/Library/Logs/GPUTray-debug.log
 .build/debug/gpu-tray --screen-test   # responder UDP z danymi syntetycznymi (test CYD bez GUI)
+/Applications/GPUTray.app/Contents/MacOS/GPUTray --bambu-dump   # surowe raporty MQTT drukarki (dane z ustawień)
 ```
 
 ## Ekran CYD (ESP32)
@@ -147,6 +153,26 @@ i ekran aktualizacji zostają w poziomie (przy 90° jak 0°, przy 270° jak 180�
 Jasność jest ograniczona do 180/255 celowo: CYD ma słaby stabilizator (AMS1117) i pełne
 podświetlenie razem ze skokiem prądu Wi-Fi potrafi zresetować płytkę.
 
+### Strona drukarki Bambu Lab
+
+<img src="docs/printer.png" width="400" alt="Strona drukarki na ekranie CYD">
+
+**Przesunięcie palcem z prawej na lewą** (poza nagłówkiem) otwiera stronę drukarki,
+z lewej na prawą wraca do statystyk Maca. Dwie kropki w nagłówku pokazują aktywną stronę.
+
+- **postęp** (pierścień: niebieski = drukuje, pomarańczowy = pauza, zielony = gotowe, czerwony = błąd),
+- **plik, stan, warstwa**, **czas do końca** i **godzina zakończenia** (wg zegara Maca),
+- **AMS**: kolory 4 slotów, aktywny (lub ostatnio użyty) w białej ramce,
+- **dysza / stół / komora** — temperatura aktualna i docelowa, pasek nagrzewania,
+- **filament**: kolor, typ i pozostała ilość na szpuli.
+
+Dane zbiera GPU Tray na Macu — lokalne MQTT drukarki (TLS, port 8883, użytkownik `bblp`,
+hasło = kod dostępu LAN) — i dokleja je do pakietu dla CYD. Konfiguracja: menu **🖨 Drukarka**
+(IP i kod: na drukarce *Ustawienia → WLAN*; numer seryjny: *Ustawienia → Urządzenie*).
+Działa także w trybie chmury; jeśli drukarka odrzuca połączenie (nowsze firmware z kontrolą
+autoryzacji), włącz na niej tryb LAN lub Developer Mode. Sprawdzone na P2S; pola raportu
+pozostałych modeli są w większości takie same (`--bambu-dump` pokazuje, co przychodzi).
+
 ### Zrzut ekranu
 
 Firmware na literę `S` z portu szeregowego odsyła bufor dashboardu; skrypt zapisuje go jako PNG
@@ -154,7 +180,11 @@ Firmware na literę `S` z portu szeregowego odsyła bufor dashboardu; skrypt zap
 
 ```bash
 python3 esp32/cyd_screenshot.py zrzut.png --wait 70   # 70 s → pełna historia GPU
+python3 esp32/cyd_screenshot.py druk.png --print       # strona drukarki
+python3 esp32/cyd_screenshot.py pion.png --rot 1       # obrót o 90° na czas zrzutu (bez zapisu)
 ```
+
+Polecenia z portu szeregowego (115200): `S` zrzut, `P` następna strona, `R` obrót o 90° bez zapisu.
 
 Na macOS otwarcie portu resetuje płytkę, stąd `--wait` (domyślnie 12 s) na połączenie z Wi-Fi i dane.
 Neutralny zrzut (host `demo-mac`, przykładowy model) daje `.build/debug/gpu-tray --screen-test`
@@ -231,6 +261,17 @@ GPU Tray odpowiada jednym JSON-em na adres i port nadawcy:
 `gpu`/`cpu` w %, pamięć w GB, sieć w MB/s, `gen` = czas bieżącej generacji (s, tylko gdy `busy`),
 `tokA` = wiek ostatniego pomiaru tok/s (s). Pola bez odczytu są pomijane.
 
+Gdy drukarka jest skonfigurowana, dochodzi obiekt `p` (teksty w ASCII — fonty CYD nie mają diakrytyków):
+
+```json
+"p":{"ok":1,"age":0,"st":"RUNNING","pct":42,"rem":83,"ly":120,"lyT":300,"f":"benchy.3mf",
+     "nz":219.6,"nzT":220,"bd":60,"bdT":60,"ch":31,"fil":"PLA","col":"FF6A13","fr":72,
+     "ams":"FF6A13,FFFFFF,161616,","act":0}
+```
+
+`ok` = połączenie z drukarką, `age` = s od ostatniego raportu (-1 = brak), `rem` w minutach,
+`ams` = kolory slotów (puste = brak szpuli), `act` = aktywny slot, `err` = kod błędu (gdy ≠ 0).
+
 ## Jak to działa (źródła danych, wszystkie bez roota)
 
 | Dane | Źródło | Częstotliwość |
@@ -239,6 +280,7 @@ GPU Tray odpowiada jednym JSON-em na adres i port nadawcy:
 | Modele, VRAM, auto-unload | HTTP `GET /api/ps` | 2 s |
 | tok/s | tail `~/.ollama/logs/server.log` (llama.cpp `print_timing`) | na żywo |
 | „Ollama pracuje" | GPU ≥ próg przy załadowanym modelu, debounce: start po 2 s, koniec po 3 s ciszy | 1 s |
+| Drukarka Bambu Lab | lokalne MQTT/TLS `device/<serial>/report` (raz `pushall`, potem raporty drukarki) | na żywo |
 
 Uwaga: przy odtwarzaniu wideo/grach GPU też rośnie — jeśli model jest wtedy załadowany,
 może pojawić się fałszywe „pracuje". Podnieś wtedy `gpuBusyThreshold`.
@@ -257,6 +299,7 @@ Sources/GPUTray/
   Notifier.swift           # powiadomienia UNUserNotificationCenter
   Autostart.swift          # LaunchAgent
   ESP32Link.swift          # responder UDP dla ekranu CYD
+  BambuClient.swift        # klient MQTT drukarki Bambu Lab (stan druku, AMS, temperatury)
   ScreenTest.swift         # --screen-test: dane syntetyczne dla CYD
   Formatters.swift, DebugLog.swift, Diagnostics.swift
 build_app.sh               # build → GPUTray.app → codesign → instalacja
@@ -264,9 +307,9 @@ esp32/
   build_esp32.sh           # kompilacja/wgranie/monitor/erase firmware
   cyd_screenshot.py        # zrzut ekranu dashboardu do PNG
   gpu_cyd/
-    gpu_cyd.ino            # maszyna stanów, UDP, jasność, obrót, tryb nocny
+    gpu_cyd.ino            # maszyna stanów, UDP, jasność, obrót, tryb nocny, gesty
     gfx.h                  # konfiguracja LovyanGFX dla CYD, paleta, helpery
-    ui_dash.h              # dashboard (sprite 8bpp, bez migotania)
+    ui_dash.h              # dashboard i strona drukarki (sprite 8bpp, bez migotania)
     ui_wifi.h              # kalibracja dotyku, lista sieci, klawiatura
     web.h                  # panel WWW: ustawienia, API JSON, OTA, logowanie kodem/QR
 ```

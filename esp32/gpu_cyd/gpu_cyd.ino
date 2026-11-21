@@ -14,7 +14,7 @@
 #include "ui_dash.h"
 #include "ui_wifi.h"
 
-#define FW_VERSION   "1.2.0"
+#define FW_VERSION   "1.3.0"
 #define WEB_HOSTNAME "gpu-cyd"
 
 LGFX lcd;
@@ -209,6 +209,26 @@ bool holdTouch(uint32_t ms) {
   return true;
 }
 
+// Śledzi palec od (x0,y0) do puszczenia (max 1,5 s). Zwraca dx przesunięcia poziomego
+// (≥ 70 px i 2× większe niż pionowe), inaczej 0. Odczyty skaczące > 80 px między próbkami
+// pomijamy — rezystancyjny XPT2046 przy odrywaniu palca potrafi dać śmieciowy punkt.
+int trackSwipe(int x0, int y0) {
+  int lx = x0, ly = y0, x, y;
+  uint32_t t0 = millis(), lastOn = t0;
+  while (millis() - t0 < 1500) {
+    if (touchXY(lcd, tcal, &x, &y)) {
+      if (abs(x - lx) < 80 && abs(y - ly) < 80) { lx = x; ly = y; }
+      lastOn = millis();
+    } else if (millis() - lastOn > 60) {
+      break;
+    }
+    delay(8);
+  }
+  waitRelease(lcd, tcal);
+  int dx = lx - x0, dy = ly - y0;
+  return (abs(dx) >= 70 && abs(dx) > 2 * abs(dy)) ? dx : 0;
+}
+
 void dashboardLoop() {
   webLoop();
   uint32_t now = millis();
@@ -237,7 +257,7 @@ void dashboardLoop() {
   // odpowiedzi gpu-tray
   int n = udp.parsePacket();
   while (n) {
-    char buf[384];
+    char buf[768];                 // ~300 B Mac + ~300 B drukarka
     int len = udp.read(buf, sizeof(buf) - 1);
     if (len > 0 && buf[0] == '{') {
       buf[len] = 0;
@@ -252,9 +272,16 @@ void dashboardLoop() {
   if (loginTick(now)) { delay(10); return; }
   setOrient(true);                           // dashboard w wybranej orientacji (też pionowej)
 
-  // 'S' na porcie szeregowym → zrzut ekranu (esp32/cyd_screenshot.py)
+  // port szeregowy: 'S' → zrzut ekranu (esp32/cyd_screenshot.py), 'P' → następna strona,
+  // 'R' → obrót o 90° bez zapisu
   while (Serial.available()) {
-    if (Serial.read() == 'S') dash.dumpScreen(now);
+    int c = Serial.read();
+    if (c == 'S') dash.dumpScreen(now);
+    if (c == 'R') applyRot(rotQ + 1, false);   // obrót do testów/zrzutów (bez zapisu w NVS)
+    if (c == 'P') {
+      dash.setPage(dash.page() == Dashboard::PageMac ? Dashboard::PagePrint : Dashboard::PageMac);
+      tLastDraw = 0;
+    }
   }
 
   bool night = isNight(now);
@@ -298,6 +325,15 @@ void dashboardLoop() {
       dash.draw(millis());         // okienko od razu, jeszcze przed puszczeniem palca
       waitRelease(lcd, tcal);
       tLastDraw = millis();
+      return;
+    }
+    if (y > 24) {                  // poza nagłówkiem: przesunięcie zmienia stronę
+      int dx = trackSwipe(x, y);
+      if (dx < 0 && dash.page() != Dashboard::PagePrint) dash.setPage(Dashboard::PagePrint);
+      else if (dx > 0 && dash.page() != Dashboard::PageMac) dash.setPage(Dashboard::PageMac);
+      else return;
+      Serial.printf("[ekran] strona %s\n", dash.page() == Dashboard::PagePrint ? "drukarka" : "mac");
+      tLastDraw = 0;
       return;
     }
   }

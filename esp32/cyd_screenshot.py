@@ -48,6 +48,10 @@ def main():
     ap.add_argument("--wait", type=float, default=12,
                     help="sekundy od otwarcia portu do zrzutu (płytka się resetuje)")
     ap.add_argument("--port", default=None)
+    ap.add_argument("--rot", type=int, default=0,
+                    help="obróć ekran o N x 90° przed zrzutem (bez zapisu ustawienia)")
+    ap.add_argument("--print", action="store_true",
+                    help="zrzut strony drukarki (firmware przełącza stronę na 'P')")
     a = ap.parse_args()
 
     port = a.port or next(iter(sorted(glob.glob("/dev/cu.usbserial-*"))), None)
@@ -63,6 +67,12 @@ def main():
     t_end = time.time() + a.wait
     while time.time() < t_end:       # odbieramy log, żeby bufor się nie przepełnił
         s.read(s.in_waiting or 1)
+    for _ in range(a.rot % 4):
+        s.write(b"R")
+        time.sleep(0.6)
+    if a.print:
+        s.write(b"P")                # strona drukarki, chwila na przerysowanie
+        time.sleep(1.0)
     s.reset_input_buffer()
     s.write(b"S")
 

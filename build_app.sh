@@ -7,11 +7,13 @@
 #   ./build_app.sh --user       → instaluje do ~/Applications
 #   ./build_app.sh <katalog>    → instaluje do wskazanego katalogu
 #
-# APP_VERSION (np. 1.2.0) i APP_BUILD (liczba) ustawiają wersję w Info.plist (CI bierze je z taga).
+# APP_VERSION (np. 1.2.0; domyślnie z ostatniego taga) i APP_BUILD (liczba) ustawiają wersję w Info.plist.
 set -euo pipefail
 cd "$(dirname "$0")"
 
-APP_VERSION="${APP_VERSION:-1.0.0}"
+# domyślnie wersja z ostatniego taga gita (v1.2.0 → 1.2.0); CI podaje ją z taga wydania
+APP_VERSION="${APP_VERSION:-$( (git describe --tags --abbrev=0 2>/dev/null || true) | sed 's/^v//')}"
+APP_VERSION="${APP_VERSION:-0.0.0}"
 APP_BUILD="${APP_BUILD:-1}"
 
 echo "▸ Budowanie (release, arm64)…"
