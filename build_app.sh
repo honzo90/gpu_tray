@@ -18,11 +18,15 @@ echo "▸ Budowanie (release, arm64)…"
 swift build -c release
 
 BIN=".build/release/gpu-tray"
-APP_ROOT="build/GPUTray.app"
-rm -rf "$APP_ROOT"
+# Paczkę składamy i podpisujemy w katalogu tymczasowym, poza repo: jeśli repo leży w iCloud Drive
+# (np. Biurko/Dokumenty), File Provider od razu dokleja do bundla atrybuty (com.apple.FinderInfo,
+# com.apple.fileprovider.*), a `codesign --verify --strict` odrzuca je jako "detritus".
+STAGE="$(mktemp -d)"
+trap 'rm -rf "$STAGE"' EXIT
+APP_ROOT="$STAGE/GPUTray.app"
 mkdir -p "$APP_ROOT/Contents/MacOS"
 
-echo "▸ Pakowanie ${APP_ROOT}…"
+echo "▸ Pakowanie…"
 cp "$BIN" "$APP_ROOT/Contents/MacOS/GPUTray"
 cat > "$APP_ROOT/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -59,6 +63,7 @@ else
     echo "⚠ Brak certyfikatu do podpisu — podpis ad-hoc (macOS zapyta o Sieć lokalną po każdym buildzie)"
     codesign --force --sign - --timestamp=none "$APP_ROOT"
 fi
+codesign --verify --strict "$APP_ROOT"
 
 DEST=""
 case "${1:-}" in
@@ -69,7 +74,12 @@ esac
 mkdir -p "$DEST"
 rm -rf "$DEST/GPUTray.app"
 echo "▸ Instalacja do ${DEST}…"
-cp -R "$APP_ROOT" "$DEST/GPUTray.app"
+# ditto bez atrybutów i resource forków — kopia przechodzi `codesign --verify --strict`
+# (cp -R przenosił FinderInfo/fileprovider z kopii w iCloud)
+ditto --noextattr --norsrc "$APP_ROOT" "$DEST/GPUTray.app"
+if ! codesign --verify --strict "$DEST/GPUTray.app" 2>/dev/null; then
+    echo "⚠ $DEST jest w iCloud Drive — macOS dokleja atrybuty, --strict nie przejdzie (podpis sam w sobie OK)"
+fi
 
 echo ""
 echo "✓ Gotowe: $DEST/GPUTray.app"
